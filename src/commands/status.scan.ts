@@ -8,6 +8,7 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
@@ -154,10 +155,23 @@ export async function scanStatus(
         if (!memoryPlugin.enabled) {
           return null;
         }
-        if (memoryPlugin.slot !== "memory-core") {
-          return null;
-        }
         const agentId = agentStatus.defaultId ?? "main";
+        if (memoryPlugin.slot !== "memory-core") {
+          const pluginRegistry = getActivePluginRegistry();
+          const registration = pluginRegistry?.memoryStatusProviders[0];
+          if (!registration) {
+            return null;
+          }
+          try {
+            const status = await registration.provider();
+            if (!status) {
+              return null;
+            }
+            return { agentId, ...status };
+          } catch {
+            return null;
+          }
+        }
         const { manager } = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
         if (!manager) {
           return null;

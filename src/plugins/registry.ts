@@ -24,6 +24,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
+  MemoryStatusProviderFn,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginLogger,
@@ -94,6 +95,12 @@ export type PluginCommandRegistration = {
   source: string;
 };
 
+export type PluginMemoryStatusRegistration = {
+  pluginId: string;
+  provider: MemoryStatusProviderFn;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -134,6 +141,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  memoryStatusProviders: PluginMemoryStatusRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -157,6 +165,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    memoryStatusProviders: [],
     diagnostics: [],
   };
 }
@@ -462,6 +471,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     } as TypedPluginHookRegistration);
   };
 
+  const registerMemoryStatus = (record: PluginRecord, provider: MemoryStatusProviderFn) => {
+    if (registry.memoryStatusProviders.length > 0) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `memory status provider already registered by ${registry.memoryStatusProviders[0].pluginId}; ignoring`,
+      });
+      return;
+    }
+    registry.memoryStatusProviders.push({
+      pluginId: record.id,
+      provider,
+      source: record.source,
+    });
+  };
+
   const normalizeLogger = (logger: PluginLogger): PluginLogger => ({
     info: logger.info,
     warn: logger.warn,
@@ -497,6 +523,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
+      registerMemoryStatus: (provider) => registerMemoryStatus(record, provider),
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };

@@ -73,12 +73,14 @@ export {
 } from "../discord/monitor/thread-bindings.js";
 export type {
   AnyAgentTool,
+  MemoryStatusProviderFn,
   OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   ProviderAuthContext,
   ProviderAuthResult,
 } from "../plugins/types.js";
+export type { MemoryProviderStatus } from "../memory/types.js";
 export type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,

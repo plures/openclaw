@@ -12,6 +12,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { MemoryProviderStatus } from "../memory/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -227,6 +228,12 @@ export type OpenClawPluginChannelRegistration = {
   dock?: ChannelDock;
 };
 
+export type MemoryStatusProviderFn = () =>
+  | MemoryProviderStatus
+  | Promise<MemoryProviderStatus>
+  | null
+  | Promise<null>;
+
 export type OpenClawPluginDefinition = {
   id?: string;
   name?: string;
@@ -274,6 +281,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerMemoryStatus: (provider: MemoryStatusProviderFn) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
