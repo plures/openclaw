@@ -65,7 +65,7 @@ export class ChatLog extends Container {
   }
 
   startAssistant(text: string, runId?: string) {
-    const component = new AssistantMessageComponent(text);
+    const component = new AssistantMessageComponent(text, true);
     this.streamingRuns.set(this.resolveRunId(runId), component);
     this.append(component);
     return component;
@@ -85,7 +85,7 @@ export class ChatLog extends Container {
     const effectiveRunId = this.resolveRunId(runId);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (existing) {
-      existing.setText(text);
+      existing.finalize(text);
       this.streamingRuns.delete(effectiveRunId);
       return;
     }
