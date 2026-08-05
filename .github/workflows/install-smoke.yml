@@ -50,7 +50,7 @@ jobs:
         run: pnpm install --ignore-scripts --frozen-lockfile
 
       - name: Set up Docker Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Run root Dockerfile CLI smoke
         run: |
