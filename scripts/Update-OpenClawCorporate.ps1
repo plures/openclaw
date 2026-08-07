@@ -225,6 +225,60 @@ function Set-YamlOverride {
     )
 }
 
+function Ensure-OpenClawLauncher {
+    param([string]$Repository)
+
+    $launcherDir = Join-Path $HOME ".local\bin"
+    $launcherPath = Join-Path $launcherDir "openclaw.cmd"
+    New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
+
+    $entrypoint = Join-Path $Repository "openclaw.mjs"
+    if (-not (Test-Path $entrypoint)) {
+        throw "OpenClaw entrypoint not found: $entrypoint"
+    }
+
+    $launcher = "@echo off`r`nnode `"$entrypoint`" %*`r`n"
+    [IO.File]::WriteAllText(
+        $launcherPath,
+        $launcher,
+        [Text.Encoding]::ASCII
+    )
+
+    # Put the stable launcher ahead of npm/pnpm global bins for future shells.
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $parts = @(
+        ($userPath -split ';') |
+            Where-Object {
+                $_ -and
+                $_.TrimEnd('\') -ine $launcherDir.TrimEnd('\')
+            }
+    )
+
+    $newUserPath = if ($parts.Count -gt 0) {
+        $launcherDir + ";" + ($parts -join ";")
+    } else {
+        $launcherDir
+    }
+
+    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+
+    # Make the launcher win in this process immediately too.
+    $processParts = @(
+        ($env:Path -split ';') |
+            Where-Object {
+                $_ -and
+                $_.TrimEnd('\') -ine $launcherDir.TrimEnd('\')
+            }
+    )
+    $env:Path = $launcherDir + ";" + ($processParts -join ";")
+
+    Write-Host "`nOpenClaw launcher:" -ForegroundColor Green
+    Write-Host "  $launcherPath"
+    Invoke-Checked $launcherPath @("--version")
+
+    return $launcherPath
+}
+
 foreach ($cmd in @("git", "node", "pnpm")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         throw "Required command not found on PATH: $cmd"
@@ -316,18 +370,19 @@ try {
     Invoke-Checked pnpm @("install", "--force")
     Invoke-Checked pnpm @("build")
     Invoke-Checked pnpm @("ui:build")
-    Invoke-Checked pnpm @("link", "--global")
 
     Write-Host "`nGit checkout version:" -ForegroundColor Green
     Invoke-Checked node @("openclaw.mjs", "--version")
 
+    $launcherPath = Ensure-OpenClawLauncher -Repository $Repo
+
     if ($ReinstallGateway) {
-        Invoke-Checked node @("openclaw.mjs", "gateway", "install", "--force")
+        Invoke-Checked $launcherPath @("gateway", "install", "--force")
     } else {
-        Invoke-Checked node @("openclaw.mjs", "gateway", "restart")
+        Invoke-Checked $launcherPath @("gateway", "restart")
     }
 
-    Invoke-Checked node @("openclaw.mjs", "gateway", "status")
+    Invoke-Checked $launcherPath @("gateway", "status")
 
     if ($PushFork) {
         Invoke-Checked git @("push", "origin", "corporate-install")
