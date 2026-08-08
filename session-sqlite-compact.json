@@ -1,0 +1,81 @@
+{
+  "mode": "compact",
+  "targets": [
+    {
+      "archivedTranscriptFiles": [],
+      "archivedUnreferencedJsonlFiles": [],
+      "importedEntries": 0,
+      "importedTranscriptEvents": 0,
+      "issues": [],
+      "legacyEntries": 0,
+      "referencedTranscriptFiles": 0,
+      "sqliteEntries": 499,
+      "unreferencedJsonlFiles": [],
+      "validatedEntries": 0,
+      "validatedTranscriptEvents": 0,
+      "agentId": "main",
+      "archivedLegacyStoreFiles": [],
+      "sqlitePath": "C:\\Users\\kbristol\\.openclaw\\agents\\main\\agent\\openclaw-agent.sqlite",
+      "storePath": "C:\\Users\\kbristol\\.openclaw\\agents\\main\\sessions\\sessions.json",
+      "compact": {
+        "dbSizeAfterBytes": 384167936,
+        "dbSizeBeforeBytes": 385576960,
+        "freelistAfterPages": 0,
+        "freelistBeforePages": 46,
+        "pageSizeBytes": 4096,
+        "reclaimedBytes": 1590336,
+        "skipped": false,
+        "walSizeAfterBytes": 0,
+        "walSizeBeforeBytes": 181312
+      },
+      "dbStats": {
+        "dbSizeBytes": 384167936,
+        "integrityCheck": "ok",
+        "largestSessions": [
+          {
+            "events": 836,
+            "rowBytes": 2286758,
+            "sessionId": "e4fcfee5-fc56-4347-bb64-6a6dded12f3f"
+          },
+          {
+            "events": 845,
+            "rowBytes": 2022737,
+            "sessionId": "d3d4e651-0435-4dd6-87e1-f167d974e4fa"
+          },
+          {
+            "events": 427,
+            "rowBytes": 1715036,
+            "sessionId": "b78b5583-9692-4d90-b240-43d57597b7a7"
+          },
+          {
+            "events": 521,
+            "rowBytes": 1496160,
+            "sessionId": "e27abf9b-9ea0-49cc-a3e5-65968b9df1c8"
+          },
+          {
+            "events": 105,
+            "rowBytes": 1338084,
+            "sessionId": "6f673311-60d1-4994-8d6f-12fc53fa069f"
+          }
+        ],
+        "totalTranscriptRowBytes": 121472122,
+        "walSizeBytes": 0
+      }
+    }
+  ],
+  "totals": {
+    "archivedLegacyStoreFiles": 0,
+    "archivedTranscriptFiles": 0,
+    "archivedUnreferencedJsonlFiles": 0,
+    "importedEntries": 0,
+    "importedTranscriptEvents": 0,
+    "issues": 0,
+    "legacyEntries": 0,
+    "reclaimedBytes": 1590336,
+    "sqliteEntries": 499,
+    "targets": 1,
+    "unreferencedJsonlFiles": 0,
+    "validatedEntries": 0,
+    "validatedTranscriptEvents": 0
+  }
+}

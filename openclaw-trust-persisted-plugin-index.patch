@@ -1,0 +1,27 @@
+diff --git a/src/plugins/plugin-registry-snapshot.ts b/src/plugins/plugin-registry-snapshot.ts
+--- a/src/plugins/plugin-registry-snapshot.ts
++++ b/src/plugins/plugin-registry-snapshot.ts
+@@ -108,6 +108,14 @@ type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+ export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+ type PluginRegistrySnapshotDiagnosticCode =
+   | "persisted-registry-missing"
+   | "persisted-registry-stale-policy"
+   | "persisted-registry-stale-source";
+
++function shouldTrustPersistedPluginIndex(env: NodeJS.ProcessEnv): boolean {
++  const value = env.OPENCLAW_TRUST_PERSISTED_PLUGIN_INDEX?.trim().toLowerCase();
++  return value === "1" || value === "true" || value === "yes" || value === "on";
++}
++
+ export type PluginRegistrySnapshotDiagnostic = {
+   level: "info" | "warn";
+   code: PluginRegistrySnapshotDiagnosticCode;
+@@ -397,7 +405,7 @@ function requiresDerivedRegistryValidation(
+       Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
+     ) ||
+     hasMismatchedPersistedBundledRoot(index, env) ||
+-    hasStalePluginFiles() ||
++    (!shouldTrustPersistedPluginIndex(env) && hasStalePluginFiles()) ||
+     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env)
+   );
+ }

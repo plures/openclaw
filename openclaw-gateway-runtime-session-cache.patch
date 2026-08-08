@@ -1,0 +1,102 @@
+diff --git a/src/gateway/server-startup-handler-prewarm.ts b/src/gateway/server-startup-handler-prewarm.ts
+--- a/src/gateway/server-startup-handler-prewarm.ts
++++ b/src/gateway/server-startup-handler-prewarm.ts
+@@
+ const SIDEBAR_SESSION_LIST_LIMIT = 60;
+ const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
+ const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
++const SKIP_DASHBOARD_SESSION_PREWARM_ENV = "OPENCLAW_SKIP_DASHBOARD_SESSION_PREWARM";
++
++function shouldSkipDashboardSessionPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
++  const value = env[SKIP_DASHBOARD_SESSION_PREWARM_ENV]?.trim().toLowerCase();
++  return value === "1" || value === "true" || value === "yes" || value === "on";
++}
+@@
+   let sessionDataPrewarmChecked = false;
+   let sessionDataPrewarmAllowed = false;
+   const shouldPrewarmSessionData = async () => {
+     if (sessionDataPrewarmChecked) {
+       return sessionDataPrewarmAllowed;
+     }
+     sessionDataPrewarmChecked = true;
++    if (shouldSkipDashboardSessionPrewarm()) {
++      log.info?.("skipping optional dashboard session prewarm by environment");
++      return false;
++    }
+     const { canPrewarmCombinedSessionStoresForGateway } =
+       await import("../config/sessions/combined-store-gateway.js");
+diff --git a/src/gateway/server-methods/sessions-list-cache.ts b/src/gateway/server-methods/sessions-list-cache.ts
+--- a/src/gateway/server-methods/sessions-list-cache.ts
++++ b/src/gateway/server-methods/sessions-list-cache.ts
+@@
+-type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
++type SessionListCompleted = SessionListFence & {
++  cachedAt: number;
++  expiresAt?: number;
++  result: SessionsListResult;
++};
+@@
+ const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
++const SESSIONS_LIST_STALE_CACHE_MS_ENV = "OPENCLAW_SESSIONS_LIST_STALE_CACHE_MS";
++const SESSIONS_LIST_STALE_CACHE_MS_MAX = 5 * 60_000;
+ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
++
++function resolveSessionsListStaleCacheMs(env: NodeJS.ProcessEnv = process.env): number {
++  const raw = env[SESSIONS_LIST_STALE_CACHE_MS_ENV]?.trim();
++  if (!raw) {
++    return 0;
++  }
++  const value = Number(raw);
++  if (!Number.isFinite(value) || value <= 0) {
++    return 0;
++  }
++  return Math.min(Math.floor(value), SESSIONS_LIST_STALE_CACHE_MS_MAX);
++}
+@@
+ export async function respondWithCachedSessionList(params: {
+@@
+ }): Promise<void> {
+   const workKey = sessionListWorkKey(params.request, params.client);
+   const state = sessionListState(params.context, params.config);
++  const staleCacheMs = resolveSessionsListStaleCacheMs();
++  const now = Date.now();
+@@
+   const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
+   const completed = cacheCompleted ? state.completed.get(workKey) : undefined;
+   if (
+     completed &&
+-    matchesSessionListFence(completed, fence) &&
+-    (completed.expiresAt === undefined || completed.expiresAt > Date.now())
++    (completed.expiresAt === undefined || completed.expiresAt > now) &&
++    (matchesSessionListFence(completed, fence) ||
++      (staleCacheMs > 0 && completed.cachedAt + staleCacheMs > now))
+   ) {
+     params.respond(true, completed.result, undefined);
+     return;
+   }
+   const pending = state.inFlight.get(workKey);
+-  if (pending && matchesSessionListFence(pending, fence)) {
++  if (pending && (matchesSessionListFence(pending, fence) || staleCacheMs > 0)) {
+     params.respond(true, await pending.promise, undefined);
+     return;
+   }
+@@
+     .then(params.run)
+     .then((result) => {
+-      if (cacheCompleted && matchesSessionListFence(readSessionListFence(params.context), fence)) {
++      if (
++        cacheCompleted &&
++        (matchesSessionListFence(readSessionListFence(params.context), fence) || staleCacheMs > 0)
++      ) {
+         const expiresAt = resolveSessionListExpiration(result);
+         if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
+-          rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });
++          rememberCompletedSessionList(state, workKey, {
++            ...fence,
++            cachedAt: Date.now(),
++            result,
++            expiresAt,
++          });
+         }
+       }
+       return result;
