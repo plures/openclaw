@@ -132,9 +132,23 @@ export async function respondWithCachedSessionList(params: {
     return;
   }
   const pending = state.inFlight.get(workKey);
-  if (pending && matchesSessionListFence(pending, fence)) {
-    params.respond(true, await pending.promise, undefined);
-    return;
+  if (pending) {
+    if (matchesSessionListFence(pending, fence)) {
+      params.respond(true, await pending.promise, undefined);
+      return;
+    }
+    // Do not start duplicate SQLite/projection work merely because the mutation fence moved
+    // while the previous list was still running. Wait for it to drain, then retry against
+    // the current fence. The retried request still receives an authoritative fresh result.
+    try {
+      await pending.promise;
+    } catch {
+      // The retry below owns error reporting for the current request.
+    }
+    if (state.inFlight.get(workKey) === pending) {
+      state.inFlight.delete(workKey);
+    }
+    return respondWithCachedSessionList(params);
   }
 
   // A request may share only work begun at the same fence. A transition during projection

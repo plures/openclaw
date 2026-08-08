@@ -38,7 +38,7 @@ import {
 
 const ADMIN_SCOPE = "operator.admin";
 
-type SessionSharingTarget = {
+export type SessionSharingTarget = {
   agentId: string;
   canonicalKey: string;
   entry: SessionEntry;

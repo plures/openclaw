@@ -22,8 +22,11 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
+import {
+  readAcpSessionMetaBatchAsync,
+  readSessionTitleFieldsFromTranscriptBatchAsync,
+} from "./session-list-read-async.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
   SessionListRowContext,
@@ -127,16 +130,12 @@ function sortSessionCreatorIdentities(
   });
 }
 
-function populateSessionListAcpMetadata(params: {
+function buildSessionListAcpEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly SessionEntryPair[];
   opts: SessionsListParams;
-  rowContext?: SessionListRowContext;
-}): void {
-  if (!params.rowContext || params.entries.length === 0) {
-    return;
-  }
-  const entries = params.entries.map(([key, entry]) => {
+}) {
+  return params.entries.map(([key, entry]) => {
     const parsed = parseAgentSessionKey(key);
     const agentId = normalizeAgentId(
       key === "global" && typeof params.opts.agentId === "string"
@@ -152,7 +151,35 @@ function populateSessionListAcpMetadata(params: {
       entry,
     };
   });
+}
+
+function populateSessionListAcpMetadata(params: {
+  cfg: OpenClawConfig;
+  entries: readonly SessionEntryPair[];
+  opts: SessionsListParams;
+  rowContext?: SessionListRowContext;
+}): void {
+  if (!params.rowContext || params.entries.length === 0) {
+    return;
+  }
+  const entries = buildSessionListAcpEntries(params);
   params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({ entries });
+}
+
+async function populateSessionListAcpMetadataAsync(params: {
+  cfg: OpenClawConfig;
+  entries: readonly SessionEntryPair[];
+  opts: SessionsListParams;
+  rowContext?: SessionListRowContext;
+}): Promise<void> {
+  if (!params.rowContext || params.entries.length === 0) {
+    return;
+  }
+  const entries = buildSessionListAcpEntries(params);
+  const metadata = await readAcpSessionMetaBatchAsync(entries);
+  params.rowContext.acpSessionMetaByEntry = new Map(
+    entries.map(({ entry }, index) => [entry, metadata[index]]),
+  );
 }
 
 function resolveSessionsListLimit(
@@ -358,7 +385,10 @@ function selectSessionEntries(params: {
   };
 }
 
-function prepareSessionList(params: ListSessionsFromStoreParams) {
+function prepareSessionList(
+  params: ListSessionsFromStoreParams,
+  options: { populateAcpMetadata?: boolean } = {},
+) {
   const { cfg, store, opts } = params;
   const now = Date.now();
   const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
@@ -412,12 +442,14 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     (selection.entries.length > 0
       ? buildSessionListRowMetadataContext({ now, userProfileIdentityById })
       : undefined);
-  populateSessionListAcpMetadata({
-    cfg,
-    entries: selection.entries,
-    opts,
-    rowContext: sharedRowContext,
-  });
+  if (options.populateAcpMetadata !== false) {
+    populateSessionListAcpMetadata({
+      cfg,
+      entries: selection.entries,
+      opts,
+      rowContext: sharedRowContext,
+    });
+  }
   return {
     ...selection,
     includeDerivedTitles: opts.includeDerivedTitles === true,
@@ -520,7 +552,13 @@ export async function listSessionsFromStoreAsync(
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
     const { cfg, store, opts } = params;
-    const list = prepareSessionList(params);
+    const list = prepareSessionList(params, { populateAcpMetadata: false });
+    await populateSessionListAcpMetadataAsync({
+      cfg,
+      entries: list.entries,
+      opts,
+      rowContext: list.rowContext,
+    });
     const sessions: GatewaySessionRow[] = [];
     const transcriptScopes = list.entries
       .slice(0, SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS)
@@ -545,7 +583,7 @@ export async function listSessionsFromStoreAsync(
           },
         ];
       });
-    const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    const transcriptFields = await readSessionTitleFieldsFromTranscriptBatchAsync(transcriptScopes);
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");

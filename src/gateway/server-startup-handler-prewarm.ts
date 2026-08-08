@@ -6,6 +6,12 @@ import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-id
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
+const DASHBOARD_PREWARM_ENV = "OPENCLAW_ENABLE_DASHBOARD_PREWARM";
+
+function isDashboardPrewarmEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[DASHBOARD_PREWARM_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -53,6 +59,10 @@ function dashboardDataPrewarmItems(
   cfg: OpenClawConfig,
   log: { info?: (msg: string) => void },
 ): GatewayHandlerPrewarmItem[] {
+  if (!isDashboardPrewarmEnabled()) {
+    log.info?.(`skipping optional dashboard prewarm; set ${DASHBOARD_PREWARM_ENV}=1 to enable`);
+    return [];
+  }
   const agentIds = listAgentIds(cfg);
   let sessionDataPrewarmChecked = false;
   let sessionDataPrewarmAllowed = false;

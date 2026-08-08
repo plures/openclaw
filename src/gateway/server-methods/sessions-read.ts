@@ -15,7 +15,6 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
-  listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveStorePath,
   runSessionsCleanup,
@@ -36,13 +35,13 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { resolveSessionListSharingAsync } from "../session-list-read-async.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
   resolveSessionSharingRole,
-  resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import {
@@ -54,10 +53,6 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "../session-utils-store-lookup.js";
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
@@ -317,79 +312,25 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           const identityId = gatewayClientSessionCreator(client)?.id;
-          const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
-            "gateway.sessions.list.sharing",
-            () => {
-              // One cache for the whole listing: sharing resolution otherwise
-              // materialized every entry of a candidate store once per row.
-              const sharingStoreCache: GatewaySessionStoreCache = new Map();
-              const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-              const resolvedSharingTargets = result.sessions.map((session) =>
-                resolveSessionSharingTarget({
+          const { sharingTargets, membershipKeys: resolvedMembershipKeys } =
+            await measureDiagnosticsTimelineSpan(
+              "gateway.sessions.list.sharing",
+              () =>
+                resolveSessionListSharingAsync({
                   cfg,
-                  projection: "list",
-                  sessionKey: session.key,
-                  storeCache: sharingStoreCache,
-                  targetDiscoveryCache,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                  sessionKeys: result.sessions.map((session) => session.key),
+                  ...(identityId && !isGatewayAdmin(client) ? { identityId } : {}),
+                  ...(p.agentId ? { agentId: p.agentId } : {}),
                 }),
-              );
-              const resolvedMembershipKeys = new Set<string>();
-              if (identityId && !isGatewayAdmin(client)) {
-                const groups = new Map<
-                  string,
-                  {
-                    agentId: string;
-                    sessionKeys: string[];
-                    storePath: string;
-                  }
-                >();
-                for (const target of resolvedSharingTargets) {
-                  if (!target) {
-                    continue;
-                  }
-                  const groupKey = `${target.agentId}\0${target.storePath}`;
-                  const group = groups.get(groupKey) ?? {
-                    agentId: target.agentId,
-                    sessionKeys: [],
-                    storePath: target.storePath,
-                  };
-                  group.sessionKeys.push(target.storeKey);
-                  groups.set(groupKey, group);
-                }
-                for (const group of groups.values()) {
-                  const firstSessionKey = group.sessionKeys[0];
-                  if (!firstSessionKey) {
-                    continue;
-                  }
-                  for (const sessionKey of listSessionMembershipKeys(
-                    {
-                      agentId: group.agentId,
-                      sessionKey: firstSessionKey,
-                      storePath: group.storePath,
-                    },
-                    group.sessionKeys,
-                    identityId,
-                  )) {
-                    resolvedMembershipKeys.add(
-                      `${group.agentId}\0${group.storePath}\0${sessionKey}`,
-                    );
-                  }
-                }
-              }
-              return {
-                sharingTargets: resolvedSharingTargets,
-                membershipKeys: resolvedMembershipKeys,
-              };
-            },
-            {
-              config: cfg,
-              phase: "sessions.list",
-              attributes: {
-                sessions: result.sessions.length,
+              {
+                config: cfg,
+                phase: "sessions.list",
+                attributes: {
+                  sessions: result.sessions.length,
+                },
               },
-            },
-          );
+            );
+          const membershipKeys = new Set(resolvedMembershipKeys);
           const placementsBySessionId = context.workerSessionPlacementService?.getMany(
             result.sessions.flatMap((session) => (session.sessionId ? [session.sessionId] : [])),
           );

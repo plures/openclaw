@@ -20,7 +20,7 @@ import {
   type ResolvedTranscriptReadTarget,
 } from "./session-transcript-readers.js";
 
-type SessionTitleFields = {
+export type SessionTitleFields = {
   firstUserMessage: string | null;
   lastMessagePreview: string | null;
 };
