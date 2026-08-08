@@ -22,6 +22,7 @@ import {
   serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { loadCombinedSessionStoreForGatewayAsync } from "../../config/sessions/combined-store-gateway-async.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
@@ -60,7 +61,6 @@ import type {
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -264,10 +264,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 phase: "sessions.list",
               },
             );
-            const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
+            const { durableStorePath, storePath, store } = await measureDiagnosticsTimelineSpan(
               "gateway.sessions.list.store_load",
               () =>
-                loadCombinedSessionStoreForGateway(cfg, {
+                loadCombinedSessionStoreForGatewayAsync(cfg, {
                   agentId: p.agentId,
                   projection: "list",
                 }),

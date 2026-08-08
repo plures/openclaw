@@ -1,0 +1,319 @@
+diff --git a/src/config/sessions/combined-store-gateway.ts b/src/config/sessions/combined-store-gateway.ts
+--- a/src/config/sessions/combined-store-gateway.ts
++++ b/src/config/sessions/combined-store-gateway.ts
+@@ -1,7 +1,14 @@
+-type GatewaySessionStoreOptions = {
++export type GatewaySessionStoreOptions = {
+   agentId?: string;
+   configuredAgentsOnly?: boolean;
+   includeIncognito?: boolean;
+   projection?: SessionEntryListScope["projection"];
+ };
+ 
++export type GatewayCombinedSessionStoreResult = {
++  diagnostics?: string[];
++  durableStorePath?: string;
++  storePath: string;
++  store: Record<string, SessionEntry>;
++};
++
+@@ -1,9 +1,4 @@
+ export function loadCombinedSessionStoreForGateway(
+   cfg: OpenClawConfig,
+   opts: GatewaySessionStoreOptions = {},
+-): {
+-  diagnostics?: string[];
+-  durableStorePath?: string;
+-  storePath: string;
+-  store: Record<string, SessionEntry>;
+-} {
++): GatewayCombinedSessionStoreResult {
+@@ -1,2 +1,45 @@
+   return { diagnostics, durableStorePath, storePath, store: combined };
+ }
++
++/**
++ * Merge process-local open incognito stores into a durable store projection.
++ *
++ * Worker threads cannot see the main thread's registry of currently-open incognito
++ * databases, so async durable materialization deliberately excludes them and calls
++ * this helper after the worker result returns.
++ */
++export function mergeOpenIncognitoSessionStoresForGateway(
++  cfg: OpenClawConfig,
++  result: GatewayCombinedSessionStoreResult,
++  opts: GatewaySessionStoreOptions = {},
++): GatewayCombinedSessionStoreResult {
++  if (opts.includeIncognito === false) {
++    return result;
++  }
++
++  const projection = opts.projection ?? "full";
++  const resolved = resolveGatewaySessionStoreTargets(cfg, opts);
++  if (resolved.incognitoTargets.length === 0) {
++    return result;
++  }
++
++  const combined = { ...result.store };
++  const incognitoStorePaths = mergeOpenIncognitoStores({
++    cfg,
++    combined,
++    projection,
++    targets: resolved.incognitoTargets,
++  });
++  if (incognitoStorePaths.length === 0) {
++    return result;
++  }
++
++  return {
++    ...result,
++    storePath: resolveCombinedStorePath(
++      [...resolved.durableTargets.map((target) => target.storePath), ...incognitoStorePaths],
++      resolved.storeConfig,
++    ),
++    store: combined,
++  };
++}
+diff --git a/src/config/sessions/combined-store-gateway-async.ts b/src/config/sessions/combined-store-gateway-async.ts
+new file mode 100644
+--- /dev/null
++++ b/src/config/sessions/combined-store-gateway-async.ts
+@@ -0,0 +1,140 @@
++import path from "node:path";
++import { fileURLToPath, pathToFileURL } from "node:url";
++import { Worker } from "node:worker_threads";
++import type { OpenClawConfig } from "../types.openclaw.js";
++import {
++  mergeOpenIncognitoSessionStoresForGateway,
++  type GatewayCombinedSessionStoreResult,
++  type GatewaySessionStoreOptions,
++} from "./combined-store-gateway.js";
++
++type WorkerRequest = {
++  id: number;
++  cfg: OpenClawConfig;
++  opts: GatewaySessionStoreOptions;
++};
++
++type WorkerResponse =
++  | { id: number; ok: true; result: GatewayCombinedSessionStoreResult }
++  | { id: number; ok: false; error: { message: string; stack?: string } };
++
++type PendingRequest = {
++  resolve: (result: GatewayCombinedSessionStoreResult) => void;
++  reject: (error: Error) => void;
++};
++
++let combinedStoreWorker: Worker | undefined;
++let nextRequestId = 1;
++const pendingRequests = new Map<number, PendingRequest>();
++
++function resolveCombinedStoreWorkerUrl(currentModuleUrl = import.meta.url): URL {
++  const currentPath = fileURLToPath(currentModuleUrl);
++  const normalized = currentPath.replaceAll(path.sep, "/");
++  const distMarker = "/dist/";
++  const distIndex = normalized.lastIndexOf(distMarker);
++  if (distIndex >= 0) {
++    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
++    return pathToFileURL(
++      path.join(distRoot, "config", "sessions", "combined-store-gateway.worker.js"),
++    );
++  }
++  const extension = path.extname(currentPath) || ".js";
++  return new URL(`./combined-store-gateway.worker${extension}`, currentModuleUrl);
++}
++
++function rejectPendingRequests(error: Error): void {
++  for (const pending of pendingRequests.values()) {
++    pending.reject(error);
++  }
++  pendingRequests.clear();
++}
++
++function resetWorker(worker: Worker, error?: Error): void {
++  if (combinedStoreWorker !== worker) {
++    return;
++  }
++  combinedStoreWorker = undefined;
++  if (error) {
++    rejectPendingRequests(error);
++  }
++}
++
++function handleWorkerResponse(response: WorkerResponse): void {
++  const pending = pendingRequests.get(response.id);
++  if (!pending) {
++    return;
++  }
++  pendingRequests.delete(response.id);
++  if (response.ok) {
++    pending.resolve(response.result);
++    return;
++  }
++  const error = new Error(response.error.message);
++  if (response.error.stack) {
++    error.stack = response.error.stack;
++  }
++  pending.reject(error);
++}
++
++function getCombinedStoreWorker(): Worker {
++  if (combinedStoreWorker) {
++    return combinedStoreWorker;
++  }
++
++  const workerUrl = resolveCombinedStoreWorkerUrl();
++  const worker = new Worker(
++    workerUrl,
++    workerUrl.pathname.endsWith(".ts") ? { execArgv: ["--import", "tsx"] } : undefined,
++  );
++  worker.unref();
++  worker.on("message", (response: WorkerResponse) => handleWorkerResponse(response));
++  worker.on("error", (error) => resetWorker(worker, error));
++  worker.on("exit", (code) => {
++    resetWorker(
++      worker,
++      pendingRequests.size > 0
++        ? new Error(`combined session store worker exited with code ${code}`)
++        : undefined,
++    );
++  });
++  combinedStoreWorker = worker;
++  return worker;
++}
++
++function materializeDurableCombinedSessionStore(
++  cfg: OpenClawConfig,
++  opts: GatewaySessionStoreOptions,
++): Promise<GatewayCombinedSessionStoreResult> {
++  const worker = getCombinedStoreWorker();
++  const id = nextRequestId++;
++  const request: WorkerRequest = {
++    id,
++    cfg,
++    // Open incognito DBs are registered in the Gateway process. The worker materializes
++    // durable stores only; the main thread merges incognito rows after the worker returns.
++    opts: { ...opts, includeIncognito: false },
++  };
++  return new Promise((resolve, reject) => {
++    pendingRequests.set(id, { resolve, reject });
++    try {
++      worker.postMessage(request);
++    } catch (error) {
++      pendingRequests.delete(id);
++      reject(error instanceof Error ? error : new Error(String(error)));
++    }
++  });
++}
++
++/**
++ * Materialize the Gateway combined session store without blocking the Gateway event loop.
++ *
++ * Durable SQLite reads and canonicalization run in a persistent worker thread. Process-local
++ * incognito rows are merged after the worker result returns.
++ */
++export async function loadCombinedSessionStoreForGatewayAsync(
++  cfg: OpenClawConfig,
++  opts: GatewaySessionStoreOptions = {},
++): Promise<GatewayCombinedSessionStoreResult> {
++  const durable = await materializeDurableCombinedSessionStore(cfg, opts);
++  return mergeOpenIncognitoSessionStoresForGateway(cfg, durable, opts);
++}
+diff --git a/src/config/sessions/combined-store-gateway.worker.ts b/src/config/sessions/combined-store-gateway.worker.ts
+new file mode 100644
+--- /dev/null
++++ b/src/config/sessions/combined-store-gateway.worker.ts
+@@ -0,0 +1,43 @@
++import { isMainThread, parentPort } from "node:worker_threads";
++import type { OpenClawConfig } from "../types.openclaw.js";
++import {
++  loadCombinedSessionStoreForGateway,
++  type GatewayCombinedSessionStoreResult,
++  type GatewaySessionStoreOptions,
++} from "./combined-store-gateway.js";
++
++type WorkerRequest = {
++  id: number;
++  cfg: OpenClawConfig;
++  opts: GatewaySessionStoreOptions;
++};
++
++type WorkerResponse =
++  | { id: number; ok: true; result: GatewayCombinedSessionStoreResult }
++  | { id: number; ok: false; error: { message: string; stack?: string } };
++
++function serializeError(error: unknown): { message: string; stack?: string } {
++  if (error instanceof Error) {
++    return {
++      message: error.message,
++      ...(error.stack ? { stack: error.stack } : {}),
++    };
++  }
++  return { message: String(error) };
++}
++
++if (!isMainThread && parentPort) {
++  parentPort.on("message", (request: WorkerRequest) => {
++    let response: WorkerResponse;
++    try {
++      const result = loadCombinedSessionStoreForGateway(request.cfg, {
++        ...request.opts,
++        includeIncognito: false,
++      });
++      response = { id: request.id, ok: true, result };
++    } catch (error) {
++      response = { id: request.id, ok: false, error: serializeError(error) };
++    }
++    parentPort.postMessage(response);
++  });
++}
+diff --git a/src/gateway/server-startup-handler-prewarm.ts b/src/gateway/server-startup-handler-prewarm.ts
+--- a/src/gateway/server-startup-handler-prewarm.ts
++++ b/src/gateway/server-startup-handler-prewarm.ts
+@@ -1,10 +1,10 @@
+ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
+-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
++  const [{ loadCombinedSessionStoreForGatewayAsync }, { listSessionsFromStoreAsync }] =
+     await Promise.all([
+-      import("../config/sessions/combined-store-gateway.js"),
++      import("../config/sessions/combined-store-gateway-async.js"),
+       import("./session-utils-list.js"),
+     ]);
+-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
++  const { durableStorePath, storePath, store } = await loadCombinedSessionStoreForGatewayAsync(cfg, {
+     agentId,
+     projection: "list",
+   });
+diff --git a/src/gateway/server-methods/sessions-read.ts b/src/gateway/server-methods/sessions-read.ts
+--- a/src/gateway/server-methods/sessions-read.ts
++++ b/src/gateway/server-methods/sessions-read.ts
+@@ -1,3 +1,4 @@
+   type SessionEntry,
+ } from "../../config/sessions.js";
++import { loadCombinedSessionStoreForGatewayAsync } from "../../config/sessions/combined-store-gateway-async.js";
+ import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+@@ -1,6 +1,5 @@
+ import {
+   buildGatewaySessionRow,
+   listSessionsFromStoreAsync,
+-  loadCombinedSessionStoreForGateway,
+   resolveCanonicalSessionEntryFromStoreKeys,
+   resolveGatewaySessionStoreTarget,
+@@ -1,7 +1,7 @@
+-            const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
++            const { durableStorePath, storePath, store } = await measureDiagnosticsTimelineSpan(
+               "gateway.sessions.list.store_load",
+               () =>
+-                loadCombinedSessionStoreForGateway(cfg, {
++                loadCombinedSessionStoreForGatewayAsync(cfg, {
+                   agentId: p.agentId,
+                   projection: "list",
+                 }),
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -1,2 +1,4 @@
+     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
++    "config/sessions/combined-store-gateway.worker":
++      "src/config/sessions/combined-store-gateway.worker.ts",
+     "gateway/exec-approval-resolver.worker": "src/gateway/exec-approval-resolver.worker.ts",

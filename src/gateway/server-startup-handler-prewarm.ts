@@ -21,15 +21,18 @@ type GatewayHandlerPrewarmHandle = {
 };
 
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
+  const [{ loadCombinedSessionStoreForGatewayAsync }, { listSessionsFromStoreAsync }] =
     await Promise.all([
-      import("../config/sessions/combined-store-gateway.js"),
+      import("../config/sessions/combined-store-gateway-async.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
-    agentId,
-    projection: "list",
-  });
+  const { durableStorePath, storePath, store } = await loadCombinedSessionStoreForGatewayAsync(
+    cfg,
+    {
+      agentId,
+      projection: "list",
+    },
+  );
   await listSessionsFromStoreAsync({
     cfg,
     durableStorePath,

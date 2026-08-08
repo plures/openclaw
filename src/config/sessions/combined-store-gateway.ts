@@ -36,11 +36,18 @@ import type { SessionEntry } from "./types.js";
 
 type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;
 
-type GatewaySessionStoreOptions = {
+export type GatewaySessionStoreOptions = {
   agentId?: string;
   configuredAgentsOnly?: boolean;
   includeIncognito?: boolean;
   projection?: SessionEntryListScope["projection"];
+};
+
+export type GatewayCombinedSessionStoreResult = {
+  diagnostics?: string[];
+  durableStorePath?: string;
+  storePath: string;
+  store: Record<string, SessionEntry>;
 };
 
 type ResolvedGatewaySessionStoreTargets = {
@@ -251,12 +258,7 @@ export function canPrewarmCombinedSessionStoresForGateway(
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions = {},
-): {
-  diagnostics?: string[];
-  durableStorePath?: string;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-} {
+): GatewayCombinedSessionStoreResult {
   const projection = opts.projection ?? "full";
   // Count admission and projection share this exact target set. Otherwise an optional
   // prewarm can approve one database and synchronously materialize another.
@@ -365,4 +367,62 @@ export function loadCombinedSessionStoreForGateway(
     storeConfig,
   );
   return { diagnostics, durableStorePath, storePath, store: combined };
+}
+/**
+ * Merge process-local open incognito stores into an already materialized durable projection.
+ *
+ * The async Gateway loader materializes durable SQLite stores in a worker thread. Open
+ * incognito database registrations are process-local, so the Gateway process merges those
+ * rows after the worker result returns.
+ */
+export function mergeOpenIncognitoSessionStoresForGateway(
+  cfg: OpenClawConfig,
+  result: GatewayCombinedSessionStoreResult,
+  opts: GatewaySessionStoreOptions = {},
+): GatewayCombinedSessionStoreResult {
+  if (opts.includeIncognito === false) {
+    return result;
+  }
+
+  const projection = opts.projection ?? "full";
+  const requestedAgentId =
+    typeof opts.agentId === "string" && opts.agentId.trim()
+      ? normalizeAgentId(opts.agentId)
+      : undefined;
+  const configuredAgentIds =
+    opts.configuredAgentsOnly === true && !requestedAgentId
+      ? new Set(listConfiguredSessionStoreAgentIds(cfg))
+      : undefined;
+  const allowedIncognitoAgentIds = requestedAgentId
+    ? new Set([requestedAgentId])
+    : configuredAgentIds;
+  const incognitoTargets = listOpenIncognitoAgentDatabases().filter(
+    (target) => !allowedIncognitoAgentIds || allowedIncognitoAgentIds.has(target.agentId),
+  );
+  if (incognitoTargets.length === 0) {
+    return result;
+  }
+
+  const combined = { ...result.store };
+  const incognitoStorePaths = mergeOpenIncognitoStores({
+    cfg,
+    combined,
+    projection,
+    targets: incognitoTargets,
+  });
+  if (incognitoStorePaths.length === 0) {
+    return result;
+  }
+
+  const storeConfig = cfg.session?.store;
+  const storePath =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? "(multiple)"
+      : resolveCombinedStorePath([result.storePath, ...incognitoStorePaths], storeConfig);
+
+  return {
+    ...result,
+    storePath,
+    store: combined,
+  };
 }
