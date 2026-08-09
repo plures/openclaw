@@ -67,7 +67,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
-import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import { loadUsageCostInWorker, loadUsageStatusInWorker } from "../usage-worker-client.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -1015,7 +1015,7 @@ function mergeDailyModelRows(
     : undefined;
 }
 
-async function loadCostUsageSummaryCached(params: {
+export async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   dayBucket?: UsageDailyBucket;
@@ -1146,9 +1146,7 @@ export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context }) => {
-    const summary = await loadUsageStatusStaleWhileRevalidate({
-      config: context.getRuntimeConfig(),
-    });
+    const summary = await loadUsageStatusInWorker(context.getRuntimeConfig());
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
@@ -1161,7 +1159,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
-    const summary = await loadCostUsageSummaryCached({
+    const summary = await loadUsageCostInWorker({
       startMs,
       endMs,
       dayBucket: resolveDayBucket(dateInterpretation),

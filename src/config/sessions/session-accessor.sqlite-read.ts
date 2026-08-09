@@ -25,6 +25,10 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  hasSqliteTranscriptMessageEventsOffThread,
+  loadSqliteTranscriptEventsOffThread,
+} from "./session-transcript-load-async.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
 export type SqliteTranscriptSnapshotRow = {
@@ -40,7 +44,7 @@ export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
 export async function loadSqliteTranscriptEvents(
   scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
-  return loadSqliteTranscriptEventsSync(scope);
+  return await loadSqliteTranscriptEventsOffThread(scope);
 }
 
 /** Loads raw transcript events synchronously from the additive SQLite transcript store. */
@@ -63,6 +67,30 @@ export function loadSqliteTranscriptEventsSync(
       databaseLabel: database.path,
       operationLabel: "session transcript fenced read",
     },
+  );
+}
+/** True when the selected transcript contains at least one message event. */
+export async function hasSqliteTranscriptMessageEvents(
+  scope: SessionTranscriptReadScope,
+): Promise<boolean> {
+  return await hasSqliteTranscriptMessageEventsOffThread(scope);
+}
+
+/** Indexed synchronous primitive used only by the transcript-load worker. */
+export function hasSqliteTranscriptMessageEventsSync(scope: SessionTranscriptReadScope): boolean {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities")
+        .select("seq")
+        .where("session_id", "=", resolved.sessionId)
+        .where("event_type", "=", "message")
+        .limit(1),
+    ),
   );
 }
 

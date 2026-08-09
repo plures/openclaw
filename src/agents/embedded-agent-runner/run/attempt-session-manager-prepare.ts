@@ -71,7 +71,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   const sessionManager = guardSessionManager(
     attempt.sessionManager ??
       (attempt.sessionTarget
-        ? SessionManager.open(
+        ? await SessionManager.openAsync(
             attempt.sessionTarget as SessionTranscriptRuntimeTarget,
             input.effectiveCwd,
           )

@@ -51,7 +51,7 @@ import {
 } from "../session-store-key.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
-  readSessionPreviewItemsFromTranscript,
+  readSessionPreviewItemsFromTranscriptAsync,
 } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionRow,
@@ -482,7 +482,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
     }
   },
-  "sessions.preview": ({ params, respond, context }) => {
+  "sessions.preview": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
     }
@@ -529,7 +529,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           previews.push({ key, status: "missing", items: [] });
           continue;
         }
-        const items = readSessionPreviewItemsFromTranscript(
+        const items = await readSessionPreviewItemsFromTranscriptAsync(
           {
             agentId: target.agentId,
             sessionEntry: entry,

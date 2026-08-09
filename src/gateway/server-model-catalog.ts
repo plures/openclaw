@@ -2,6 +2,8 @@ import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-cata
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
+import { ModelCatalogCache } from "./model-catalog-cache.js";
+import { loadGatewayModelCatalogSnapshotInWorker } from "./model-catalog-worker-client.js";
 import type {
   GatewayModelCatalogOwnerSnapshot,
   GatewayModelCatalogSnapshot,
@@ -27,6 +29,21 @@ type LoadGatewayModelCatalogParams = {
   workspaceDir?: string;
 };
 
+const modelCatalogCache = new ModelCatalogCache<GatewayModelCatalogSnapshot>({
+  freshForMs: 10 * 60 * 1000,
+});
+const configIds = new WeakMap<object, number>();
+let nextConfigId = 1;
+
+function resolveConfigId(config: GatewayModelCatalogConfig): number {
+  const object = config as object;
+  const existing = configIds.get(object);
+  if (existing) return existing;
+  const id = nextConfigId++;
+  configIds.set(object, id);
+  return id;
+}
+
 async function resolveLoader(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<LoadPublishedPreparedModelCatalogOwnerSnapshot> {
@@ -47,6 +64,7 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
     ]);
   resetPreparedModelRuntimeSnapshotsForTest();
   resetModelCatalogBuilderCacheForTest();
+  modelCatalogCache.clear();
 }
 
 async function loadGatewayModelCatalogOwnerSnapshot(
@@ -67,6 +85,26 @@ async function loadGatewayModelCatalogOwnerSnapshot(
 export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogSnapshot> {
+  if (!params?.getConfig && !params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
+    const config = getRuntimeConfig();
+    const readOnly = params?.readOnly !== false;
+    const key = [
+      resolveConfigId(config),
+      params?.agentId ?? "",
+      params?.agentDir ?? "",
+      params?.workspaceDir ?? "",
+      readOnly ? "read-only" : "full",
+    ].join("\0");
+    return modelCatalogCache.get(key, () =>
+      loadGatewayModelCatalogSnapshotInWorker({
+        ...(params?.agentId ? { agentId: params.agentId } : {}),
+        ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+        config,
+        readOnly,
+        ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }),
+    );
+  }
   const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
   return {
     ...owner.modelCatalog,

@@ -35,6 +35,15 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
+vi.mock("../usage-worker-client.js", () => ({
+  loadUsageCostInWorker: vi.fn(),
+  loadUsageStatusInWorker: vi.fn(async (config) => {
+    const { loadUsageStatusStaleWhileRevalidate } =
+      await import("./models-auth-status-usage-cache.js");
+    return await loadUsageStatusStaleWhileRevalidate({ config });
+  }),
+}));
+
 import {
   clearModelAuthStatusUsageCache,
   fingerprintProviderUsageCredentials,

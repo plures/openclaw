@@ -46,6 +46,14 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+vi.mock("../usage-worker-client.js", () => ({
+  loadUsageCostInWorker: vi.fn(async (params) => {
+    const { loadCostUsageSummaryCached } = await import("./usage.js");
+    return await loadCostUsageSummaryCached(params);
+  }),
+  loadUsageStatusInWorker: vi.fn(),
+}));
+
 import {
   discoverAllSessions,
   loadCostUsageSummaryFromCache,

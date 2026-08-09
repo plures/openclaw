@@ -15,6 +15,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
+import {
+  readRecentSessionTranscriptMessageEventsAsync,
+  readSessionTranscriptMessageEventByIdAsync,
+  readSessionTranscriptMessageEventCountAsync,
+  readSessionTranscriptMessageEventPageAsync,
+  readSessionTranscriptMessageEventsAsync,
+} from "./session-transcript-read-async.js";
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
@@ -146,7 +153,7 @@ async function readSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
 ): Promise<SqliteMessageRecord[]> {
   return extractMessageRecordsFromEventEntries(
-    readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
+    await readSessionTranscriptMessageEventsAsync(toTranscriptReadScope(target)),
   );
 }
 
@@ -178,7 +185,10 @@ async function readRecentSqliteMessageRecords(
   totalMessages: number;
 }> {
   const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
+  const page = await readRecentSessionTranscriptMessageEventsAsync(
+    toTranscriptReadScope(target),
+    normalized,
+  );
   return {
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
@@ -322,7 +332,7 @@ export async function readSessionMessageByIdAsync(
   opts?: { allowResetArchiveFallback?: boolean },
 ): Promise<ReadSessionMessageByIdResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const foundEvent = readSessionTranscriptMessageEventById(
+  const foundEvent = await readSessionTranscriptMessageEventByIdAsync(
     toTranscriptReadScope(target),
     messageId,
   );
@@ -361,7 +371,7 @@ export async function readSessionMessageCountAsync(
   const target = resolveTranscriptReadTarget(scope);
   const transcriptScope = toTranscriptReadScope(target);
   try {
-    return readSessionTranscriptMessageEventCount(transcriptScope);
+    return await readSessionTranscriptMessageEventCountAsync(transcriptScope);
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -369,7 +379,7 @@ export async function readSessionMessageCountAsync(
     // The failed read already scheduled the rebuild; wait before assigning
     // a sequence so a concurrent send cannot fail or reuse a stale count.
     await waitForSessionTranscriptProjection(transcriptScope);
-    return readSessionTranscriptMessageEventCount(transcriptScope);
+    return await readSessionTranscriptMessageEventCountAsync(transcriptScope);
   }
 }
 
@@ -403,7 +413,10 @@ export async function readSessionMessagesPageWithStatsAsync(
   opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const page = readSessionTranscriptMessageEventPage(toTranscriptReadScope(target), opts);
+  const page = await readSessionTranscriptMessageEventPageAsync(
+    toTranscriptReadScope(target),
+    opts,
+  );
   if (page.totalMessages === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readPage({ ...opts, resetArchiveOnly: true });
   }
@@ -441,7 +454,8 @@ export async function readLatestSessionUsageFromTranscriptAsync(
     );
   }
   const target = resolveTranscriptReadTarget(scope);
-  return readSqliteAggregateUsageSnapshot(target);
+  const records = await readSqliteMessageRecords(target);
+  return aggregateSqliteUsageSnapshots(records.map(sqliteRecordMessageWithSeq));
 }
 
 /** Reads aggregate usage from a bounded transcript tail synchronously through the reader seam. */
@@ -461,4 +475,14 @@ export function readSessionPreviewItemsFromTranscript(
 ): SessionPreviewItem[] {
   const target = resolveTranscriptReadTarget(scope);
   return buildSqlitePreviewItems(target, maxItems, maxChars);
+}
+/** Reads compact session preview items without blocking the Gateway event loop. */
+export async function readSessionPreviewItemsFromTranscriptAsync(
+  scope: SessionTranscriptReadScope,
+  maxItems: number,
+  maxChars: number,
+): Promise<SessionPreviewItem[]> {
+  const target = resolveTranscriptReadTarget(scope);
+  const records = await readSqliteMessageRecords(target);
+  return buildSessionPreviewItems(records.map(sqliteRecordMessageWithSeq), maxItems, maxChars);
 }

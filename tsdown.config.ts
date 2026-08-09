@@ -292,9 +292,14 @@ function buildCoreDistEntries(): Record<string, string> {
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
     "config/sessions/session-accessor.sqlite-archive.worker":
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+    "config/sessions/session-transcript-load.worker":
+      "src/config/sessions/session-transcript-load.worker.ts",
     "config/sessions/combined-store-gateway.worker":
       "src/config/sessions/combined-store-gateway.worker.ts",
+    "gateway/model-catalog.worker": "src/gateway/model-catalog.worker.ts",
     "gateway/session-list-read.worker": "src/gateway/session-list-read.worker.ts",
+    "gateway/session-transcript-read.worker": "src/gateway/session-transcript-read.worker.ts",
+    "gateway/usage.worker": "src/gateway/usage.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",

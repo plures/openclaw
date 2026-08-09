@@ -1,0 +1,369 @@
+diff --git a/src/gateway/model-catalog-cache.test.ts b/src/gateway/model-catalog-cache.test.ts
+new file mode 100644
+index 00000000000..3dadbcce9a7
+--- /dev/null
++++ b/src/gateway/model-catalog-cache.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it, vi } from "vitest";
++import { ModelCatalogCache } from "./model-catalog-cache.js";
++
++describe("ModelCatalogCache", () => {
++  it("coalesces cold misses and reuses fresh values", async () => {
++    let complete!: (value: string) => void;
++    const refresh = vi.fn(() => new Promise<string>((resolve) => (complete = resolve)));
++    const cache = new ModelCatalogCache<string>({ freshForMs: 1000 });
++    const first = cache.get("main", refresh);
++    const second = cache.get("main", refresh);
++    expect(refresh).toHaveBeenCalledTimes(1);
++    complete("one");
++    await expect(Promise.all([first, second])).resolves.toEqual(["one", "one"]);
++    await expect(cache.get("main", refresh)).resolves.toBe("one");
++  });
++
++  it("returns stale while a single refresh replaces it", async () => {
++    let now = 0;
++    let complete!: (value: string) => void;
++    const refresh = vi
++      .fn<() => Promise<string>>()
++      .mockResolvedValueOnce("one")
++      .mockImplementationOnce(() => new Promise<string>((resolve) => (complete = resolve)));
++    const cache = new ModelCatalogCache<string>({ freshForMs: 10, now: () => now });
++    await cache.get("main", refresh);
++    now = 11;
++    await expect(cache.get("main", refresh)).resolves.toBe("one");
++    await expect(cache.get("main", refresh)).resolves.toBe("one");
++    expect(refresh).toHaveBeenCalledTimes(2);
++    complete("two");
++    await vi.waitFor(async () => expect(await cache.get("main", refresh)).toBe("two"));
++  });
++
++  it("retains the last good value after a failed stale refresh", async () => {
++    let now = 0;
++    const refresh = vi
++      .fn<() => Promise<string>>()
++      .mockResolvedValueOnce("one")
++      .mockRejectedValue(new Error("failed"));
++    const cache = new ModelCatalogCache<string>({ freshForMs: 10, now: () => now });
++    await cache.get("main", refresh);
++    now = 11;
++    await expect(cache.get("main", refresh)).resolves.toBe("one");
++    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
++    await expect(cache.get("main", refresh)).resolves.toBe("one");
++  });
++});
+diff --git a/src/gateway/model-catalog-cache.ts b/src/gateway/model-catalog-cache.ts
+new file mode 100644
+index 00000000000..0d5355fe548
+--- /dev/null
++++ b/src/gateway/model-catalog-cache.ts
+@@ -0,0 +1,56 @@
++export type ModelCatalogCacheOptions = {
++  freshForMs: number;
++  now?: () => number;
++};
++
++type CacheEntry<T> = {
++  value?: T;
++  refreshedAt: number;
++  refresh?: Promise<T>;
++};
++
++/** Process-local stale-while-refresh cache with one refresh per key. */
++export class ModelCatalogCache<T> {
++  private readonly entries = new Map<string, CacheEntry<T>>();
++  private readonly freshForMs: number;
++  private readonly now: () => number;
++
++  constructor(options: ModelCatalogCacheOptions) {
++    this.freshForMs = options.freshForMs;
++    this.now = options.now ?? Date.now;
++  }
++
++  get(key: string, refresh: () => Promise<T>): Promise<T> {
++    const entry = this.entries.get(key) ?? { refreshedAt: 0 };
++    this.entries.set(key, entry);
++
++    if (entry.value !== undefined && this.now() - entry.refreshedAt < this.freshForMs) {
++      return Promise.resolve(entry.value);
++    }
++
++    if (!entry.refresh) {
++      const pending = refresh()
++        .then((value) => {
++          entry.value = value;
++          entry.refreshedAt = this.now();
++          return value;
++        })
++        .finally(() => {
++          if (entry.refresh === pending) {
++            entry.refresh = undefined;
++          }
++        });
++      entry.refresh = pending;
++    }
++
++    if (entry.value !== undefined) {
++      entry.refresh.catch(() => undefined);
++      return Promise.resolve(entry.value);
++    }
++    return entry.refresh;
++  }
++
++  clear(): void {
++    this.entries.clear();
++  }
++}
+diff --git a/src/gateway/model-catalog-worker-client.ts b/src/gateway/model-catalog-worker-client.ts
+new file mode 100644
+index 00000000000..4d4ec572d1e
+--- /dev/null
++++ b/src/gateway/model-catalog-worker-client.ts
+@@ -0,0 +1,103 @@
++import path from "node:path";
++import { fileURLToPath, pathToFileURL } from "node:url";
++import { Worker } from "node:worker_threads";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
++
++type WorkerRequestPayload = {
++  agentId?: string;
++  agentDir?: string;
++  config: OpenClawConfig;
++  readOnly: boolean;
++  workspaceDir?: string;
++};
++type WorkerRequest = WorkerRequestPayload & { id: number };
++type WorkerResponse =
++  | { id: number; ok: true; result: GatewayModelCatalogSnapshot }
++  | { id: number; ok: false; error: { message: string; stack?: string } };
++type PendingRequest = {
++  resolve: (result: GatewayModelCatalogSnapshot) => void;
++  reject: (error: Error) => void;
++};
++
++let workerInstance: Worker | undefined;
++let nextRequestId = 1;
++const pendingRequests = new Map<number, PendingRequest>();
++
++export function resolveModelCatalogWorkerUrl(currentModuleUrl = import.meta.url): URL {
++  const currentPath = fileURLToPath(currentModuleUrl);
++  const normalized = currentPath.replaceAll(path.sep, "/");
++  const distMarker = "/dist/";
++  const distIndex = normalized.lastIndexOf(distMarker);
++  if (distIndex >= 0) {
++    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
++    return pathToFileURL(path.join(distRoot, "gateway", "model-catalog.worker.js"));
++  }
++  const extension = path.extname(currentPath) || ".js";
++  return new URL(`./model-catalog.worker${extension}`, currentModuleUrl);
++}
++
++function rejectAllPending(error: Error): void {
++  for (const pending of pendingRequests.values()) {
++    pending.reject(error);
++  }
++  pendingRequests.clear();
++}
++
++function resetWorker(worker: Worker, error?: Error): void {
++  if (workerInstance !== worker) return;
++  workerInstance = undefined;
++  if (error) rejectAllPending(error);
++}
++
++function getWorker(): Worker {
++  if (workerInstance) return workerInstance;
++  const workerUrl = resolveModelCatalogWorkerUrl();
++  const worker = new Worker(workerUrl, {
++    execArgv: workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
++  });
++  worker.unref?.();
++  worker.on("message", (response: WorkerResponse) => {
++    const pending = pendingRequests.get(response.id);
++    if (!pending) return;
++    pendingRequests.delete(response.id);
++    if (response.ok) {
++      pending.resolve(response.result);
++      return;
++    }
++    const error = new Error(response.error.message);
++    if (response.error.stack) error.stack = response.error.stack;
++    pending.reject(error);
++  });
++  worker.on("error", (error) =>
++    resetWorker(worker, error instanceof Error ? error : new Error(String(error))),
++  );
++  worker.on("exit", (code) => {
++    resetWorker(
++      worker,
++      pendingRequests.size > 0
++        ? new Error(`model catalog worker exited with code ${code}`)
++        : undefined,
++    );
++  });
++  workerInstance = worker;
++  return worker;
++}
++
++export function loadGatewayModelCatalogSnapshotInWorker(
++  payload: WorkerRequestPayload,
++): Promise<GatewayModelCatalogSnapshot> {
++  const worker = getWorker();
++  const id = nextRequestId++;
++  return new Promise((resolve, reject) => {
++    pendingRequests.set(id, { resolve, reject });
++    try {
++      // Node Worker.postMessage is not the browser Window API.
++      // oxlint-disable-next-line unicorn/require-post-message-target-origin
++      worker.postMessage({ ...payload, id } as WorkerRequest);
++    } catch (error) {
++      pendingRequests.delete(id);
++      reject(error instanceof Error ? error : new Error(String(error)));
++    }
++  });
++}
+diff --git a/src/gateway/model-catalog.worker.ts b/src/gateway/model-catalog.worker.ts
+new file mode 100644
+index 00000000000..e7b5bfcd158
+--- /dev/null
++++ b/src/gateway/model-catalog.worker.ts
+@@ -0,0 +1,58 @@
++import { isMainThread, parentPort } from "node:worker_threads";
++import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++
++type WorkerRequest = {
++  id: number;
++  agentId?: string;
++  agentDir?: string;
++  config: OpenClawConfig;
++  readOnly: boolean;
++  workspaceDir?: string;
++};
++type WorkerResponse =
++  | { id: number; ok: true; result: unknown }
++  | { id: number; ok: false; error: { message: string; stack?: string } };
++
++function serializeError(error: unknown): { message: string; stack?: string } {
++  if (error instanceof Error) {
++    return { message: error.message, ...(error.stack ? { stack: error.stack } : {}) };
++  }
++  return { message: String(error) };
++}
++
++if (!isMainThread && parentPort) {
++  const port = parentPort;
++  port.on("message", async (request: WorkerRequest) => {
++    let response: WorkerResponse;
++    try {
++      const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
++        await import("../agents/prepared-model-catalog.js");
++      const owner = resolvePublishedModelCatalogOwner(
++        await loadPublishedPreparedModelCatalogOwnerSnapshot({
++          ...(request.agentId ? { agentId: request.agentId } : {}),
++          ...(request.agentDir ? { agentDir: request.agentDir } : {}),
++          config: request.config,
++          readOnly: request.readOnly,
++          ...(request.workspaceDir ? { workspaceDir: request.workspaceDir } : {}),
++        }),
++      );
++      response = {
++        id: request.id,
++        ok: true,
++        result: {
++          ...owner.modelCatalog,
++          agentId: owner.agentId,
++          agentDir: owner.agentDir,
++          workspaceDir: owner.workspaceDir,
++          config: owner.config,
++        },
++      };
++    } catch (error) {
++      response = { id: request.id, ok: false, error: serializeError(error) };
++    }
++    // Node MessagePort.postMessage is not the browser Window API.
++    // oxlint-disable-next-line unicorn/require-post-message-target-origin
++    port.postMessage(response);
++  });
++}
+diff --git a/src/gateway/server-model-catalog.ts b/src/gateway/server-model-catalog.ts
+index 26b74e69cb5..50720447e25 100644
+--- a/src/gateway/server-model-catalog.ts
++++ b/src/gateway/server-model-catalog.ts
+@@ -2,6 +2,8 @@ import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-cata
+ import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
+ // Gateway catalog reads use the atomic prepared runtime generation.
+ import { getRuntimeConfig } from "../config/io.js";
++import { ModelCatalogCache } from "./model-catalog-cache.js";
++import { loadGatewayModelCatalogSnapshotInWorker } from "./model-catalog-worker-client.js";
+ import type {
+   GatewayModelCatalogOwnerSnapshot,
+   GatewayModelCatalogSnapshot,
+@@ -27,6 +29,21 @@ type LoadGatewayModelCatalogParams = {
+   workspaceDir?: string;
+ };
+ 
++const modelCatalogCache = new ModelCatalogCache<GatewayModelCatalogSnapshot>({
++  freshForMs: 10 * 60 * 1000,
++});
++const configIds = new WeakMap<object, number>();
++let nextConfigId = 1;
++
++function resolveConfigId(config: GatewayModelCatalogConfig): number {
++  const object = config as object;
++  const existing = configIds.get(object);
++  if (existing) return existing;
++  const id = nextConfigId++;
++  configIds.set(object, id);
++  return id;
++}
++
+ async function resolveLoader(
+   params?: LoadGatewayModelCatalogParams,
+ ): Promise<LoadPublishedPreparedModelCatalogOwnerSnapshot> {
+@@ -47,6 +64,7 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
+     ]);
+   resetPreparedModelRuntimeSnapshotsForTest();
+   resetModelCatalogBuilderCacheForTest();
++  modelCatalogCache.clear();
+ }
+ 
+ async function loadGatewayModelCatalogOwnerSnapshot(
+@@ -67,6 +85,26 @@ async function loadGatewayModelCatalogOwnerSnapshot(
+ export async function loadGatewayModelCatalogSnapshot(
+   params?: LoadGatewayModelCatalogParams,
+ ): Promise<GatewayModelCatalogSnapshot> {
++  if (!params?.getConfig && !params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
++    const config = getRuntimeConfig();
++    const readOnly = params?.readOnly !== false;
++    const key = [
++      resolveConfigId(config),
++      params?.agentId ?? "",
++      params?.agentDir ?? "",
++      params?.workspaceDir ?? "",
++      readOnly ? "read-only" : "full",
++    ].join("\0");
++    return modelCatalogCache.get(key, () =>
++      loadGatewayModelCatalogSnapshotInWorker({
++        ...(params?.agentId ? { agentId: params.agentId } : {}),
++        ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
++        config,
++        readOnly,
++        ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
++      }),
++    );
++  }
+   const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
+   return {
+     ...owner.modelCatalog,
+diff --git a/tsdown.config.ts b/tsdown.config.ts
+--- a/tsdown.config.ts
++++ b/tsdown.config.ts
+@@ -296,6 +296,7 @@
+       "src/config/sessions/session-transcript-load.worker.ts",
+     "config/sessions/combined-store-gateway.worker":
+       "src/config/sessions/combined-store-gateway.worker.ts",
++    "gateway/model-catalog.worker": "src/gateway/model-catalog.worker.ts",
+     "gateway/session-list-read.worker": "src/gateway/session-list-read.worker.ts",
+     "gateway/session-transcript-read.worker": "src/gateway/session-transcript-read.worker.ts",
+     "config/sessions/session-transcript-reconcile.worker":

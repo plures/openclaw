@@ -4,7 +4,10 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
-import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
@@ -76,6 +79,17 @@ export class SessionManager extends SessionManagerBranching {
 
   static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
+    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+  }
+
+  static async openAsync(
+    target: SessionTranscriptRuntimeTarget,
+    cwdOverride?: string,
+  ): Promise<SessionManager> {
+    const entries = (await loadTranscriptEvents(target)) as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

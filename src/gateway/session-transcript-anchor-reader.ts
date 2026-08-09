@@ -1,7 +1,5 @@
-import {
-  readSessionTranscriptMessageAnchorPage,
-  type SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptMessageAnchorPageAsync } from "./session-transcript-read-async.js";
 import {
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
@@ -28,7 +26,10 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
     scope.sessionEntry.sessionId !== scope.sessionId
       ? undefined
       : target.sessionFile;
-  const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
+  const page = await readSessionTranscriptMessageAnchorPageAsync(
+    toTranscriptReadScope(target),
+    opts,
+  );
   if (!page.found) {
     if (opts.allowResetArchiveFallback === true) {
       return await new ArchivedTranscriptReader({
