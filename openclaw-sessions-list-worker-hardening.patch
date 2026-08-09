@@ -1,0 +1,74 @@
+diff --git a/src/config/sessions/combined-store-gateway-async.ts b/src/config/sessions/combined-store-gateway-async.ts
+index 5c3f9aa58cb..b8b42d66e64 100644
+--- a/src/config/sessions/combined-store-gateway-async.ts
++++ b/src/config/sessions/combined-store-gateway-async.ts
+@@ -88,7 +88,9 @@ function getCombinedStoreWorker(): Worker {
+   });
+   worker.unref?.();
+   worker.on("message", (response: WorkerResponse) => handleWorkerResponse(response));
+-  worker.on("error", (error) => resetWorker(worker, error));
++  worker.on("error", (error) =>
++    resetWorker(worker, error instanceof Error ? error : new Error(String(error))),
++  );
+   worker.on("exit", (code) => {
+     resetWorker(
+       worker,
+diff --git a/src/config/sessions/combined-store-gateway.worker.ts b/src/config/sessions/combined-store-gateway.worker.ts
+index 828116f7876..a566512002a 100644
+--- a/src/config/sessions/combined-store-gateway.worker.ts
++++ b/src/config/sessions/combined-store-gateway.worker.ts
+@@ -27,7 +27,8 @@ function serializeError(error: unknown): { message: string; stack?: string } {
+ }
+ 
+ if (!isMainThread && parentPort) {
+-  parentPort.on("message", (request: WorkerRequest) => {
++  const port = parentPort;
++  port.on("message", (request: WorkerRequest) => {
+     let response: WorkerResponse;
+     try {
+       const result = loadCombinedSessionStoreForGateway(request.cfg, {
+@@ -40,6 +41,6 @@ if (!isMainThread && parentPort) {
+     }
+     // Node MessagePort.postMessage is not the browser Window API and has no targetOrigin.
+     // oxlint-disable-next-line unicorn/require-post-message-target-origin
+-    parentPort.postMessage(response);
++    port.postMessage(response);
+   });
+ }
+diff --git a/src/gateway/session-list-read-async.ts b/src/gateway/session-list-read-async.ts
+index 3837e6c06fe..27830f1498a 100644
+--- a/src/gateway/session-list-read-async.ts
++++ b/src/gateway/session-list-read-async.ts
+@@ -107,7 +107,9 @@ function getWorker(): Worker {
+     }
+     pending.reject(error);
+   });
+-  worker.on("error", (error) => resetWorker(worker, error));
++  worker.on("error", (error) =>
++    resetWorker(worker, error instanceof Error ? error : new Error(String(error))),
++  );
+   worker.on("exit", (code) => {
+     resetWorker(
+       worker,
+diff --git a/src/gateway/session-list-read.worker.ts b/src/gateway/session-list-read.worker.ts
+index 5118d66b4f7..2937964c98e 100644
+--- a/src/gateway/session-list-read.worker.ts
++++ b/src/gateway/session-list-read.worker.ts
+@@ -115,7 +115,8 @@ function resolveSharing(request: Extract<WorkerRequest, { type: "sharing" }>) {
+ }
+ 
+ if (!isMainThread && parentPort) {
+-  parentPort.on("message", (request: WorkerRequest) => {
++  const port = parentPort;
++  port.on("message", (request: WorkerRequest) => {
+     let response: WorkerResponse;
+     try {
+       let result: unknown = undefined;
+@@ -141,6 +142,6 @@ if (!isMainThread && parentPort) {
+ 
+     // Node MessagePort.postMessage is not the browser Window API and has no targetOrigin.
+     // oxlint-disable-next-line unicorn/require-post-message-target-origin
+-    parentPort.postMessage(response);
++    port.postMessage(response);
+   });
+ }
