@@ -10,6 +10,7 @@ import type {
   readSessionTranscriptMessageEvents,
   SessionTranscriptReadScope,
 } from "../config/sessions/session-accessor.js";
+import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type RecentOptions = Parameters<typeof readRecentSessionTranscriptMessageEvents>[1];
 type RecentResult = ReturnType<typeof readRecentSessionTranscriptMessageEvents>;
@@ -27,7 +28,13 @@ type WorkerRequestPayload =
   | { type: "by-id"; scope: SessionTranscriptReadScope; messageId: string }
   | { type: "count"; scope: SessionTranscriptReadScope }
   | { type: "page"; scope: SessionTranscriptReadScope; options: PageOptions }
-  | { type: "anchor"; scope: SessionTranscriptReadScope; options: AnchorOptions };
+  | { type: "anchor"; scope: SessionTranscriptReadScope; options: AnchorOptions }
+  | {
+      type: "preview";
+      scope: SessionTranscriptReadScope;
+      maxItems: number;
+      maxChars: number;
+    };
 
 type WorkerRequest = WorkerRequestPayload & { id: number };
 
@@ -207,4 +214,14 @@ export function readSessionTranscriptMessageAnchorPageAsync(
 ): Promise<AnchorResult> {
   const key = `anchor\0${scopeKey(scope)}\0${JSON.stringify(options)}`;
   return coalesced(key, () => requestWorker<AnchorResult>({ type: "anchor", scope, options }));
+}
+
+export function readSessionPreviewItemsInWorkerAsync(
+  scope: SessionTranscriptReadScope,
+  maxItems: number,
+  maxChars: number,
+): Promise<SessionPreviewItem[]> {
+  return coalesced(`preview\0${scopeKey(scope)}\0${maxItems}\0${maxChars}`, () =>
+    requestWorker<SessionPreviewItem[]>({ type: "preview", scope, maxItems, maxChars }),
+  );
 }

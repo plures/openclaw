@@ -88,7 +88,9 @@ function getCombinedStoreWorker(): Worker {
   });
   worker.unref?.();
   worker.on("message", (response: WorkerResponse) => handleWorkerResponse(response));
-  worker.on("error", (error) => resetWorker(worker, error));
+  worker.on("error", (error) =>
+    resetWorker(worker, error instanceof Error ? error : new Error(String(error))),
+  );
   worker.on("exit", (code) => {
     resetWorker(
       worker,

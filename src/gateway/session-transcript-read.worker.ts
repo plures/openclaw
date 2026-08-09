@@ -8,6 +8,7 @@ import {
   readSessionTranscriptMessageEvents,
   type SessionTranscriptReadScope,
 } from "../config/sessions/session-accessor.js";
+import { readSessionPreviewItemsFromTranscript } from "./session-transcript-readers.js";
 
 type WorkerRequest =
   | { id: number; type: "events"; scope: SessionTranscriptReadScope }
@@ -30,6 +31,13 @@ type WorkerRequest =
       type: "anchor";
       scope: SessionTranscriptReadScope;
       options: Parameters<typeof readSessionTranscriptMessageAnchorPage>[1];
+    }
+  | {
+      id: number;
+      type: "preview";
+      scope: SessionTranscriptReadScope;
+      maxItems: number;
+      maxChars: number;
     };
 
 type WorkerResponse =
@@ -47,7 +55,8 @@ function serializeError(error: unknown): { message: string; stack?: string } {
 }
 
 if (!isMainThread && parentPort) {
-  parentPort.on("message", (request: WorkerRequest) => {
+  const port = parentPort;
+  port.on("message", (request: WorkerRequest) => {
     let response: WorkerResponse;
     try {
       let result: unknown;
@@ -70,6 +79,13 @@ if (!isMainThread && parentPort) {
         case "anchor":
           result = readSessionTranscriptMessageAnchorPage(request.scope, request.options);
           break;
+        case "preview":
+          result = readSessionPreviewItemsFromTranscript(
+            request.scope,
+            request.maxItems,
+            request.maxChars,
+          );
+          break;
       }
       response = { id: request.id, ok: true, result };
     } catch (error) {
@@ -78,6 +94,6 @@ if (!isMainThread && parentPort) {
 
     // Node MessagePort.postMessage is not the browser Window API.
     // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    parentPort.postMessage(response);
+    port.postMessage(response);
   });
 }

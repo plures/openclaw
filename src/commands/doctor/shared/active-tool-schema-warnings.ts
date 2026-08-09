@@ -48,6 +48,11 @@ async function resolveRuntimeModelContext(params: {
     {
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
+      // Doctor is diagnostic and must not start live provider discovery. Resolve configured and
+      // bundled-static model facts only; the runtime lifecycle owns network-backed publication.
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+      allowBundledStaticCatalogFallback: true,
     },
   );
   const model = resolution.model as ProviderRuntimeModel | undefined;

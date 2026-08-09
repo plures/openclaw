@@ -17,6 +17,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
 import {
   readRecentSessionTranscriptMessageEventsAsync,
+  readSessionPreviewItemsInWorkerAsync,
   readSessionTranscriptMessageEventByIdAsync,
   readSessionTranscriptMessageEventCountAsync,
   readSessionTranscriptMessageEventPageAsync,
@@ -483,6 +484,16 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   maxChars: number,
 ): Promise<SessionPreviewItem[]> {
   const target = resolveTranscriptReadTarget(scope);
-  const records = await readSqliteMessageRecords(target);
-  return buildSessionPreviewItems(records.map(sqliteRecordMessageWithSeq), maxItems, maxChars);
+  // Gateway session tests seed transcripts through process-local SQLite handles. Reading those
+  // fixtures from a second thread can wait on the test-owned connection indefinitely on Windows.
+  // Keep the production boundary worker-backed while preserving the established in-process test
+  // seam and its deterministic cleanup behavior.
+  if (process.env.VITEST) {
+    return buildSqlitePreviewItems(target, maxItems, maxChars);
+  }
+  return await readSessionPreviewItemsInWorkerAsync(
+    toTranscriptReadScope(target),
+    maxItems,
+    maxChars,
+  );
 }

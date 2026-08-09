@@ -291,6 +291,25 @@ describe("active tool schema doctor warnings", () => {
     expect(toolState.normalizeTools).toHaveBeenCalled();
   });
 
+  it("resolves model facts without starting live provider discovery", async () => {
+    await collectActiveToolSchemaProjectionWarnings({
+      cfg: {},
+      env: { HOME: "/tmp/openclaw-test" },
+    });
+
+    expect(toolState.resolveModelAsync).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({
+        skipAgentDiscovery: true,
+        skipProviderRuntimeHooks: true,
+        allowBundledStaticCatalogFallback: true,
+      }),
+    );
+  });
+
   it("reports toolset construction failures instead of crashing doctor", async () => {
     toolState.throwError = new Error("plugin startup failed");
 

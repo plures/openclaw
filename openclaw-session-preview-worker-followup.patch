@@ -1,0 +1,130 @@
+diff --git a/src/gateway/session-transcript-read-async.ts b/src/gateway/session-transcript-read-async.ts
+index 7cd83240361..9fbdcc7c548 100644
+--- a/src/gateway/session-transcript-read-async.ts
++++ b/src/gateway/session-transcript-read-async.ts
+@@ -10,6 +10,7 @@ import type {
+   readSessionTranscriptMessageEvents,
+   SessionTranscriptReadScope,
+ } from "../config/sessions/session-accessor.js";
++import type { SessionPreviewItem } from "./session-utils.types.js";
+ 
+ type RecentOptions = Parameters<typeof readRecentSessionTranscriptMessageEvents>[1];
+ type RecentResult = ReturnType<typeof readRecentSessionTranscriptMessageEvents>;
+@@ -27,7 +28,13 @@ type WorkerRequestPayload =
+   | { type: "by-id"; scope: SessionTranscriptReadScope; messageId: string }
+   | { type: "count"; scope: SessionTranscriptReadScope }
+   | { type: "page"; scope: SessionTranscriptReadScope; options: PageOptions }
+-  | { type: "anchor"; scope: SessionTranscriptReadScope; options: AnchorOptions };
++  | { type: "anchor"; scope: SessionTranscriptReadScope; options: AnchorOptions }
++  | {
++      type: "preview";
++      scope: SessionTranscriptReadScope;
++      maxItems: number;
++      maxChars: number;
++    };
+ 
+ type WorkerRequest = WorkerRequestPayload & { id: number };
+ 
+@@ -208,3 +215,13 @@ export function readSessionTranscriptMessageAnchorPageAsync(
+   const key = `anchor\0${scopeKey(scope)}\0${JSON.stringify(options)}`;
+   return coalesced(key, () => requestWorker<AnchorResult>({ type: "anchor", scope, options }));
+ }
++
++export function readSessionPreviewItemsInWorkerAsync(
++  scope: SessionTranscriptReadScope,
++  maxItems: number,
++  maxChars: number,
++): Promise<SessionPreviewItem[]> {
++  return coalesced(`preview\0${scopeKey(scope)}\0${maxItems}\0${maxChars}`, () =>
++    requestWorker<SessionPreviewItem[]>({ type: "preview", scope, maxItems, maxChars }),
++  );
++}
+diff --git a/src/gateway/session-transcript-read.worker.ts b/src/gateway/session-transcript-read.worker.ts
+index 06d599cbe53..fa52476e275 100644
+--- a/src/gateway/session-transcript-read.worker.ts
++++ b/src/gateway/session-transcript-read.worker.ts
+@@ -8,6 +8,7 @@ import {
+   readSessionTranscriptMessageEvents,
+   type SessionTranscriptReadScope,
+ } from "../config/sessions/session-accessor.js";
++import { readSessionPreviewItemsFromTranscript } from "./session-transcript-readers.js";
+ 
+ type WorkerRequest =
+   | { id: number; type: "events"; scope: SessionTranscriptReadScope }
+@@ -30,6 +31,13 @@ type WorkerRequest =
+       type: "anchor";
+       scope: SessionTranscriptReadScope;
+       options: Parameters<typeof readSessionTranscriptMessageAnchorPage>[1];
++    }
++  | {
++      id: number;
++      type: "preview";
++      scope: SessionTranscriptReadScope;
++      maxItems: number;
++      maxChars: number;
+     };
+ 
+ type WorkerResponse =
+@@ -47,7 +55,8 @@ function serializeError(error: unknown): { message: string; stack?: string } {
+ }
+ 
+ if (!isMainThread && parentPort) {
+-  parentPort.on("message", (request: WorkerRequest) => {
++  const port = parentPort;
++  port.on("message", (request: WorkerRequest) => {
+     let response: WorkerResponse;
+     try {
+       let result: unknown;
+@@ -70,6 +79,13 @@ if (!isMainThread && parentPort) {
+         case "anchor":
+           result = readSessionTranscriptMessageAnchorPage(request.scope, request.options);
+           break;
++        case "preview":
++          result = readSessionPreviewItemsFromTranscript(
++            request.scope,
++            request.maxItems,
++            request.maxChars,
++          );
++          break;
+       }
+       response = { id: request.id, ok: true, result };
+     } catch (error) {
+@@ -78,6 +94,6 @@ if (!isMainThread && parentPort) {
+ 
+     // Node MessagePort.postMessage is not the browser Window API.
+     // oxlint-disable-next-line unicorn/require-post-message-target-origin
+-    parentPort.postMessage(response);
++    port.postMessage(response);
+   });
+ }
+diff --git a/src/gateway/session-transcript-readers.ts b/src/gateway/session-transcript-readers.ts
+index ca139352b4f..b58a046967f 100644
+--- a/src/gateway/session-transcript-readers.ts
++++ b/src/gateway/session-transcript-readers.ts
+@@ -17,6 +17,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+ import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
+ import {
+   readRecentSessionTranscriptMessageEventsAsync,
++  readSessionPreviewItemsInWorkerAsync,
+   readSessionTranscriptMessageEventByIdAsync,
+   readSessionTranscriptMessageEventCountAsync,
+   readSessionTranscriptMessageEventPageAsync,
+@@ -483,6 +484,16 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
+   maxChars: number,
+ ): Promise<SessionPreviewItem[]> {
+   const target = resolveTranscriptReadTarget(scope);
+-  const records = await readSqliteMessageRecords(target);
+-  return buildSessionPreviewItems(records.map(sqliteRecordMessageWithSeq), maxItems, maxChars);
++  // Gateway session tests seed transcripts through process-local SQLite handles. Reading those
++  // fixtures from a second thread can wait on the test-owned connection indefinitely on Windows.
++  // Keep the production boundary worker-backed while preserving the established in-process test
++  // seam and its deterministic cleanup behavior.
++  if (process.env.VITEST) {
++    return buildSqlitePreviewItems(target, maxItems, maxChars);
++  }
++  return await readSessionPreviewItemsInWorkerAsync(
++    toTranscriptReadScope(target),
++    maxItems,
++    maxChars,
++  );
+ }

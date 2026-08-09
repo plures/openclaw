@@ -27,7 +27,8 @@ function serializeError(error: unknown): { message: string; stack?: string } {
 }
 
 if (!isMainThread && parentPort) {
-  parentPort.on("message", (request: WorkerRequest) => {
+  const port = parentPort;
+  port.on("message", (request: WorkerRequest) => {
     let response: WorkerResponse;
     try {
       const result = loadCombinedSessionStoreForGateway(request.cfg, {
@@ -40,6 +41,6 @@ if (!isMainThread && parentPort) {
     }
     // Node MessagePort.postMessage is not the browser Window API and has no targetOrigin.
     // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    parentPort.postMessage(response);
+    port.postMessage(response);
   });
 }

@@ -1,0 +1,32 @@
+diff --git a/dist/sidecar-lock.js b/dist/sidecar-lock.js
+--- a/dist/sidecar-lock.js
++++ b/dist/sidecar-lock.js
+@@ -29,7 +29,9 @@ function resolveManagerState(key) {
+         // The global manager symbol is shared across package copies and hot reloads.
+         // Backfill state created by fs-safe versions that predate reclaim guards.
+         state.reclaimCleanupRegistered ??= false;
+-        state.reclaimGuards ??= new Set();
++        if (!(state.reclaimGuards instanceof Set)) {
++            state.reclaimGuards = new Set();
++        }
+         for (const held of state.held.values()) {
+             held.refCount ??= 1;
+         }
+@@ -78,10 +80,15 @@ function snapshotMatchesSync(lockPath, observed) {
+     }
+ }
+ function releaseAllReclaimGuardsSync(state) {
+-    for (const reclaimGuardPath of state.reclaimGuards) {
++    if (!(state.reclaimGuards instanceof Set)) {
++        state.reclaimGuards = new Set();
++        return;
++    }
++    const reclaimGuards = state.reclaimGuards;
++    for (const reclaimGuardPath of reclaimGuards) {
+         try {
+             fsSync.rmdirSync(reclaimGuardPath);
+-            state.reclaimGuards.delete(reclaimGuardPath);
++            reclaimGuards.delete(reclaimGuardPath);
+         }
+         catch {
+             // Best-effort process-exit cleanup. A surviving guard fails closed.

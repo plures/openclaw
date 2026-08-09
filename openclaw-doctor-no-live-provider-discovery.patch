@@ -1,0 +1,46 @@
+diff --git a/src/commands/doctor/shared/active-tool-schema-warnings.test.ts b/src/commands/doctor/shared/active-tool-schema-warnings.test.ts
+index 2fc87519187..928ee8b3c74 100644
+--- a/src/commands/doctor/shared/active-tool-schema-warnings.test.ts
++++ b/src/commands/doctor/shared/active-tool-schema-warnings.test.ts
+@@ -291,6 +291,25 @@ describe("active tool schema doctor warnings", () => {
+     expect(toolState.normalizeTools).toHaveBeenCalled();
+   });
+ 
++  it("resolves model facts without starting live provider discovery", async () => {
++    await collectActiveToolSchemaProjectionWarnings({
++      cfg: {},
++      env: { HOME: "/tmp/openclaw-test" },
++    });
++
++    expect(toolState.resolveModelAsync).toHaveBeenCalledWith(
++      expect.any(String),
++      expect.any(String),
++      expect.any(String),
++      expect.any(Object),
++      expect.objectContaining({
++        skipAgentDiscovery: true,
++        skipProviderRuntimeHooks: true,
++        allowBundledStaticCatalogFallback: true,
++      }),
++    );
++  });
++
+   it("reports toolset construction failures instead of crashing doctor", async () => {
+     toolState.throwError = new Error("plugin startup failed");
+ 
+diff --git a/src/commands/doctor/shared/active-tool-schema-warnings.ts b/src/commands/doctor/shared/active-tool-schema-warnings.ts
+index cc8f4471d8d..b9faa31e16f 100644
+--- a/src/commands/doctor/shared/active-tool-schema-warnings.ts
++++ b/src/commands/doctor/shared/active-tool-schema-warnings.ts
+@@ -48,6 +48,11 @@ async function resolveRuntimeModelContext(params: {
+     {
+       agentId: params.agentId,
+       workspaceDir: params.workspaceDir,
++      // Doctor is diagnostic and must not start live provider discovery. Resolve configured and
++      // bundled-static model facts only; the runtime lifecycle owns network-backed publication.
++      skipAgentDiscovery: true,
++      skipProviderRuntimeHooks: true,
++      allowBundledStaticCatalogFallback: true,
+     },
+   );
+   const model = resolution.model as ProviderRuntimeModel | undefined;
