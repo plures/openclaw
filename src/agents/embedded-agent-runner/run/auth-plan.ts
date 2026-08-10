@@ -52,6 +52,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   workspaceDir: string;
   requestStreamTransportOverrides?: "present";
   nativeModelOwned: boolean;
+  initialModelAuthProfileId?: string;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -181,6 +182,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       getModel: params.getRuntimeModel,
       nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
+      initialModelAuthProfileId: params.initialModelAuthProfileId,
       providerUsesProfileScopedModelMetadata,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {

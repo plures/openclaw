@@ -1,9 +1,11 @@
 /** Orchestrates one embedded-agent attempt from prompt setup through stream result. */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
@@ -58,6 +60,16 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const preparationTiming = {
+    config: params.config,
+    onStageStart: (stage: string) =>
+      markDiagnosticRunProgress({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        reason: `agent_prepare:${stage}`,
+      }),
+  };
   const runAbortController = new AbortController();
   const {
     agentCoreThinkingLevel,
@@ -79,9 +91,7 @@ export async function runEmbeddedAttempt(
   } = await measureEmbeddedAgentPreparation(
     "attempt.setup",
     () => prepareEmbeddedAttemptSetup(params),
-    {
-      config: params.config,
-    },
+    preparationTiming,
   );
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -166,11 +176,13 @@ export async function runEmbeddedAttempt(
           sandbox,
           sessionAgentId,
         }),
-      { config: params.config },
+      preparationTiming,
     );
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
     const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
     prepStages.mark("skills");
+    await yieldToEventLoop();
+    await externalAbortController.throwIfFiredAfterPrepCleanup();
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
@@ -225,7 +237,7 @@ export async function runEmbeddedAttempt(
             return toolSearchCatalogExecutor(toolParams);
           },
         }),
-      { config: params.config },
+      preparationTiming,
     );
     toolSearchCatalogRef = preparedToolBase.toolSearchCatalogRef;
     const {
@@ -240,6 +252,8 @@ export async function runEmbeddedAttempt(
     } = preparedToolBase;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
+    await yieldToEventLoop();
+    await externalAbortController.throwIfFiredAfterPrepCleanup();
     const preparedBootstrap = await measureEmbeddedAgentPreparation(
       "attempt.bootstrap",
       () =>
@@ -253,7 +267,7 @@ export async function runEmbeddedAttempt(
           sessionAgentId,
           sessionLabel: params.sessionKey ?? params.sessionId,
         }),
-      { config: params.config },
+      preparationTiming,
     );
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
@@ -275,7 +289,7 @@ export async function runEmbeddedAttempt(
           preparedToolBase,
           sessionAgentId,
         }),
-      { config: params.config },
+      preparationTiming,
     );
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
@@ -305,7 +319,7 @@ export async function runEmbeddedAttempt(
           getProviderRuntimeHandle,
           markStage: (name) => prepStages.mark(name),
         }),
-      { config: params.config },
+      preparationTiming,
     );
     const {
       catalogToolHookContext,
@@ -315,6 +329,8 @@ export async function runEmbeddedAttempt(
       toolSearchRunPlan,
     } = preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
+    await yieldToEventLoop();
+    await externalAbortController.throwIfFiredAfterPrepCleanup();
     const preparedSystemPrompt = await measureEmbeddedAgentPreparation(
       "attempt.system-prompt",
       () =>
@@ -342,7 +358,7 @@ export async function runEmbeddedAttempt(
             toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
           toolSearchRuntimeConfig,
         }),
-      { config: params.config },
+      preparationTiming,
     );
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const {
@@ -364,7 +380,7 @@ export async function runEmbeddedAttempt(
             releaseRetainedSessionLock = release;
           },
         }),
-      { config: params.config },
+      preparationTiming,
     );
 
     let session: AgentSession | undefined;
@@ -456,7 +472,7 @@ export async function runEmbeddedAttempt(
               },
             },
           }),
-        { config: params.config },
+        preparationTiming,
       );
       const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,

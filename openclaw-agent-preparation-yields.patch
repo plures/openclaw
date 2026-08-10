@@ -1,0 +1,58 @@
+diff --git a/src/agents/embedded-agent-runner/run/attempt.ts b/src/agents/embedded-agent-runner/run/attempt.ts
+index 917a44b5e69..17330ac11f7 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.ts
+@@ -1,4 +1,5 @@
+ /** Orchestrates one embedded-agent attempt from prompt setup through stream result. */
++import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+ import {
+   assertContextEngineHostSupport,
+   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+@@ -171,6 +172,8 @@ export async function runEmbeddedAttempt(
+     restoreSkillEnv = preparedSkills.restoreSkillEnv;
+     const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+     prepStages.mark("skills");
++    await yieldToEventLoop();
++    await externalAbortController.throwIfFiredAfterPrepCleanup();
+ 
+     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
+     if (isRawModelRun && log.isEnabled("debug")) {
+@@ -240,6 +243,8 @@ export async function runEmbeddedAttempt(
+     } = preparedToolBase;
+     prepStages.mark("core-plugin-tools");
+     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
++    await yieldToEventLoop();
++    await externalAbortController.throwIfFiredAfterPrepCleanup();
+     const preparedBootstrap = await measureEmbeddedAgentPreparation(
+       "attempt.bootstrap",
+       () =>
+@@ -315,6 +320,8 @@ export async function runEmbeddedAttempt(
+       toolSearchRunPlan,
+     } = preparedToolCatalog;
+     toolSearchCatalogApplied = toolSearch.catalogRegistered;
++    await yieldToEventLoop();
++    await externalAbortController.throwIfFiredAfterPrepCleanup();
+     const preparedSystemPrompt = await measureEmbeddedAgentPreparation(
+       "attempt.system-prompt",
+       () =>
+diff --git a/src/agents/embedded-agent-runner/run/lane-controller.ts b/src/agents/embedded-agent-runner/run/lane-controller.ts
+index ecbcf202b5f..d4541313f5e 100644
+--- a/src/agents/embedded-agent-runner/run/lane-controller.ts
++++ b/src/agents/embedded-agent-runner/run/lane-controller.ts
+@@ -1,3 +1,4 @@
++import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+ import {
+   assertAgentRunLifecycleGenerationCurrent,
+   getAgentEventLifecycleGeneration,
+@@ -131,6 +132,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
+       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+       params.replyOperation?.markGlobalLaneWaitEnded();
+       throwIfAborted();
++      // Global admission often releases a burst of control-plane work that queued
++      // behind the prior turn. Let aborts, health timers, and worker completions run
++      // before entering the next preparation-heavy agent turn.
++      await yieldToEventLoop();
++      throwIfAborted();
+       let lifecycleGeneration = options.getLifecycleGeneration();
+       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+       const existingContext = getAgentRunContext(params.runId);

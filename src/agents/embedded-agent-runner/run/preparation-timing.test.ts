@@ -57,4 +57,33 @@ describe("embedded agent preparation timing", () => {
       { stage: "attempt.tool-base" },
     ]);
   });
+
+  it("records the stage before synchronous or asynchronous work starts", async () => {
+    const order: string[] = [];
+    const options = {
+      onStageStart: (stage: string) => order.push(`start:${stage}`),
+    };
+
+    await measureEmbeddedAgentPreparation(
+      "async-stage",
+      () => {
+        order.push("run:async-stage");
+      },
+      options,
+    );
+    measureEmbeddedAgentPreparationSync(
+      "sync-stage",
+      () => {
+        order.push("run:sync-stage");
+      },
+      options,
+    );
+
+    expect(order).toEqual([
+      "start:async-stage",
+      "run:async-stage",
+      "start:sync-stage",
+      "run:sync-stage",
+    ]);
+  });
 });

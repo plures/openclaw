@@ -7,6 +7,7 @@ import {
 type EmbeddedAgentPreparationTimingOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  onStageStart?: (stage: string) => void;
 };
 
 function timingOptions(stage: string, options: EmbeddedAgentPreparationTimingOptions) {
@@ -24,6 +25,7 @@ export function measureEmbeddedAgentPreparation<T>(
   run: () => Promise<T> | T,
   options: EmbeddedAgentPreparationTimingOptions = {},
 ): Promise<T> {
+  options.onStageStart?.(stage);
   return measureDiagnosticsTimelineSpan("agent.prepare", run, timingOptions(stage, options));
 }
 
@@ -33,5 +35,6 @@ export function measureEmbeddedAgentPreparationSync<T>(
   run: () => T,
   options: EmbeddedAgentPreparationTimingOptions = {},
 ): T {
+  options.onStageStart?.(stage);
   return measureDiagnosticsTimelineSpanSync("agent.prepare", run, timingOptions(stage, options));
 }

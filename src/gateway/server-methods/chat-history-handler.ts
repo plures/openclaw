@@ -54,6 +54,7 @@ import {
   readChatHistoryPage,
   readChatHistoryMessageSeq,
 } from "./chat-history-pages.js";
+import { ChatHistorySingleFlight, type GatewayResponseArgs } from "./chat-history-single-flight.js";
 import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import type { ChatStartupProjectionResult } from "./chat-startup-projection-contract.js";
@@ -67,6 +68,8 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
+
+const chatHistorySingleFlight = new ChatHistorySingleFlight();
 
 async function handleChatMetadataRequest({
   params,
@@ -143,7 +146,7 @@ function shouldReplayOldestChatHistoryRecord(params: {
   return boundedCount < projectedCount;
 }
 
-async function handleChatHistoryRequest({
+async function buildChatHistoryResponse({
   params,
   respond,
   context,
@@ -515,12 +518,49 @@ async function handleChatHistoryRequest({
   respond(true, payload);
 }
 
+function chatHistorySingleFlightKey(params: Record<string, unknown>): string {
+  return JSON.stringify([
+    params.sessionKey,
+    params.agentId,
+    params.limit,
+    params.offset,
+    params.messageId,
+    params.sessionId,
+    params.maxChars,
+  ]);
+}
+
+function captureChatHistoryResponse(
+  opts: GatewayRequestHandlerOptions,
+): Promise<GatewayResponseArgs> {
+  return new Promise<GatewayResponseArgs>((resolve, reject) => {
+    let responded = false;
+    const respond: GatewayRequestHandlerOptions["respond"] = (...args) => {
+      if (responded) {
+        return;
+      }
+      responded = true;
+      resolve(args);
+    };
+    void buildChatHistoryResponse({ ...opts, respond, method: "chat.history" }).then(() => {
+      if (!responded) {
+        reject(new Error("chat.history handler completed without a response"));
+      }
+    }, reject);
+  });
+}
+
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": async (opts) => {
-    await handleChatHistoryRequest({ ...opts, method: "chat.history" });
+    const response = await chatHistorySingleFlight.run(
+      opts.context,
+      chatHistorySingleFlightKey(opts.params),
+      () => captureChatHistoryResponse(opts),
+    );
+    opts.respond(...response);
   },
   "chat.startup": async (opts) => {
-    await handleChatHistoryRequest({
+    await buildChatHistoryResponse({
       ...opts,
       method: "chat.startup",
       includeAgentsList: true,

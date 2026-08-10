@@ -54,10 +54,12 @@ export async function prepareEmbeddedRunRuntime(input: {
   ) => void;
   fallbackConfigured: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  markDiagnosticStage?: (stage: string) => void;
 }) {
   const params = input.runParams;
   let provider = input.provider;
   let modelId = input.modelId;
+  input.markDiagnosticStage?.("model-resolution");
   const modelSetup = await resolveEmbeddedRunModelSetup({
     runParams: params,
     provider,
@@ -82,6 +84,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     nativeModelOwned,
     modelConfigProvider,
     model,
+    initialModelAuthProfileId,
     authStorage,
     modelRegistry,
   } = modelSetup;
@@ -151,6 +154,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   agentHarness = selectHarnessForModel(effectiveModel);
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
+  input.markDiagnosticStage?.("auth-plan");
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     runParams: params,
     provider,
@@ -160,6 +164,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     workspaceDir: input.workspaceDir,
     requestStreamTransportOverrides,
     nativeModelOwned,
+    initialModelAuthProfileId,
     authStorage,
     modelRegistry,
     preparedModelRuntime: input.preparedModelRuntime,
@@ -421,6 +426,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     ? advancePluginHarnessAuthAttempt
     : authController.advanceAuthProfile;
 
+  input.markDiagnosticStage?.("auth-initialize");
   if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
     await authController.initializeAuthProfile();
   } else if (lockedProfileId) {

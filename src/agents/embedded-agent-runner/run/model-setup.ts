@@ -214,6 +214,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     nativeModelOwned,
     modelConfigProvider,
     model,
+    initialModelAuthProfileId: nativeModelOwned ? undefined : runParams.authProfileId,
     authStorage,
     modelRegistry,
   };

@@ -11,6 +11,7 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -202,15 +203,24 @@ async function runEmbeddedAgentOrchestrated(
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
+      const markStartupProgress = (stage: string) =>
+        markDiagnosticRunProgress({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          reason: `agent_startup:${stage}`,
+        });
       // Subscription-scoped claude-cli auth executes via the CLI backend;
       // resolved post-admission so dispatched runs obey the same lifecycle,
       // placement, and concurrency gates as native embedded runs.
+      markStartupProgress("cli-dispatch");
       const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
       if (cliDispatched) {
         return cliDispatched;
       }
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();
+      markStartupProgress("workspace-resolution");
       const requestedWorkspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -271,6 +281,7 @@ async function runEmbeddedAgentOrchestrated(
       // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
       // Cold plugin loading and provider discovery can exceed the lane no-progress budget.
       // Active runtime acquisition is progress, not a hung lane task.
+      markStartupProgress("prepared-runtime");
       const preparedModelRuntimeLease = await withEmbeddedRunLaneProgressHeartbeat(
         noteLaneTaskProgress,
         () =>
@@ -289,6 +300,7 @@ async function runEmbeddedAgentOrchestrated(
           preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
         });
         params = rebound.runParams;
+        markStartupProgress("project-resolution");
         const workspaceResolution = rebound.workspaceResolution;
         const repoRoot =
           resolveSystemPromptRepoRoot({
@@ -381,6 +393,7 @@ async function runEmbeddedAgentOrchestrated(
               channelContext: params.channelContext,
             }),
           };
+          markStartupProgress("before-agent-reply");
           const hookResult = await runBeforeAgentReplyForTurn({
             runId: params.runId,
             trigger: params.trigger,
@@ -406,6 +419,7 @@ async function runEmbeddedAgentOrchestrated(
             };
           }
 
+          markStartupProgress("attempt-dispatch");
           return await executePreparedEmbeddedRun({
             runParams: params,
             provider,

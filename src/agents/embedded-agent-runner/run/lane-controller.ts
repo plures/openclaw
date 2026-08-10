@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -130,6 +131,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       let params = options.getParams();
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       params.replyOperation?.markGlobalLaneWaitEnded();
+      throwIfAborted();
+      // Global admission often releases a burst of control-plane work that queued
+      // behind the prior turn. Let aborts, health timers, and worker completions run
+      // before entering the next preparation-heavy agent turn.
+      await yieldToEventLoop();
       throwIfAborted();
       let lifecycleGeneration = options.getLifecycleGeneration();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();

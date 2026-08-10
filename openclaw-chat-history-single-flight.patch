@@ -1,0 +1,212 @@
+diff --git a/src/gateway/server-methods/chat-history-handler.ts b/src/gateway/server-methods/chat-history-handler.ts
+index 16dc847821d..dbc11ec39e9 100644
+--- a/src/gateway/server-methods/chat-history-handler.ts
++++ b/src/gateway/server-methods/chat-history-handler.ts
+@@ -54,6 +54,7 @@ import {
+   readChatHistoryPage,
+   readChatHistoryMessageSeq,
+ } from "./chat-history-pages.js";
++import { ChatHistorySingleFlight, type GatewayResponseArgs } from "./chat-history-single-flight.js";
+ import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
+ import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+ import type { ChatStartupProjectionResult } from "./chat-startup-projection-contract.js";
+@@ -68,6 +69,8 @@ import { assertValidParams } from "./validation.js";
+ 
+ type ChatHistoryMethod = "chat.history" | "chat.startup";
+ 
++const chatHistorySingleFlight = new ChatHistorySingleFlight();
++
+ async function handleChatMetadataRequest({
+   params,
+   respond,
+@@ -143,7 +146,7 @@ function shouldReplayOldestChatHistoryRecord(params: {
+   return boundedCount < projectedCount;
+ }
+ 
+-async function handleChatHistoryRequest({
++async function buildChatHistoryResponse({
+   params,
+   respond,
+   context,
+@@ -515,12 +518,49 @@ async function handleChatHistoryRequest({
+   respond(true, payload);
+ }
+ 
++function chatHistorySingleFlightKey(params: Record<string, unknown>): string {
++  return JSON.stringify([
++    params.sessionKey,
++    params.agentId,
++    params.limit,
++    params.offset,
++    params.messageId,
++    params.sessionId,
++    params.maxChars,
++  ]);
++}
++
++function captureChatHistoryResponse(
++  opts: GatewayRequestHandlerOptions,
++): Promise<GatewayResponseArgs> {
++  return new Promise<GatewayResponseArgs>((resolve, reject) => {
++    let responded = false;
++    const respond: GatewayRequestHandlerOptions["respond"] = (...args) => {
++      if (responded) {
++        return;
++      }
++      responded = true;
++      resolve(args);
++    };
++    void buildChatHistoryResponse({ ...opts, respond, method: "chat.history" }).then(() => {
++      if (!responded) {
++        reject(new Error("chat.history handler completed without a response"));
++      }
++    }, reject);
++  });
++}
++
+ export const chatHistoryHandlers: GatewayRequestHandlers = {
+   "chat.history": async (opts) => {
+-    await handleChatHistoryRequest({ ...opts, method: "chat.history" });
++    const response = await chatHistorySingleFlight.run(
++      opts.context,
++      chatHistorySingleFlightKey(opts.params),
++      () => captureChatHistoryResponse(opts),
++    );
++    opts.respond(...response);
+   },
+   "chat.startup": async (opts) => {
+-    await handleChatHistoryRequest({
++    await buildChatHistoryResponse({
+       ...opts,
+       method: "chat.startup",
+       includeAgentsList: true,
+diff --git a/src/gateway/server-methods/chat-history-single-flight.test.ts b/src/gateway/server-methods/chat-history-single-flight.test.ts
+new file mode 100644
+index 00000000000..9f54a3782e0
+--- /dev/null
++++ b/src/gateway/server-methods/chat-history-single-flight.test.ts
+@@ -0,0 +1,72 @@
++import { describe, expect, test, vi } from "vitest";
++import { ChatHistorySingleFlight, type GatewayResponseArgs } from "./chat-history-single-flight.js";
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  const promise = new Promise<T>((resolvePromise) => {
++    resolve = resolvePromise;
++  });
++  return { promise, resolve };
++}
++
++describe("ChatHistorySingleFlight", () => {
++  test("shares identical in-flight work within one Gateway context", async () => {
++    const singleFlight = new ChatHistorySingleFlight();
++    const context = {};
++    const pending = deferred<GatewayResponseArgs>();
++    const build = vi.fn(() => pending.promise);
++
++    const first = singleFlight.run(context, "same", build);
++    const second = singleFlight.run(context, "same", build);
++    pending.resolve([true, { messages: ["shared"] }]);
++
++    await expect(Promise.all([first, second])).resolves.toEqual([
++      [true, { messages: ["shared"] }],
++      [true, { messages: ["shared"] }],
++    ]);
++    expect(build).toHaveBeenCalledTimes(1);
++  });
++
++  test("does not retain completed responses", async () => {
++    const singleFlight = new ChatHistorySingleFlight();
++    const context = {};
++    const build = vi.fn(async (): Promise<GatewayResponseArgs> => [true, { messages: [] }]);
++
++    await singleFlight.run(context, "same", build);
++    await singleFlight.run(context, "same", build);
++
++    expect(build).toHaveBeenCalledTimes(2);
++  });
++
++  test("evicts failed work so a retry can rebuild", async () => {
++    const singleFlight = new ChatHistorySingleFlight();
++    const context = {};
++    const build = vi
++      .fn<() => Promise<GatewayResponseArgs>>()
++      .mockRejectedValueOnce(new Error("projection failed"))
++      .mockResolvedValueOnce([true, { messages: [] }]);
++
++    await expect(singleFlight.run(context, "same", build)).rejects.toThrow("projection failed");
++    await expect(singleFlight.run(context, "same", build)).resolves.toEqual([
++      true,
++      { messages: [] },
++    ]);
++    expect(build).toHaveBeenCalledTimes(2);
++  });
++
++  test("bounds bookkeeping while preserving overflow work", async () => {
++    const singleFlight = new ChatHistorySingleFlight({ maxEntriesPerContext: 1 });
++    const context = {};
++    const pending = deferred<GatewayResponseArgs>();
++    const overflow = vi.fn(async (): Promise<GatewayResponseArgs> => [true, { overflow: true }]);
++
++    const first = singleFlight.run(context, "first", () => pending.promise);
++    await expect(singleFlight.run(context, "second", overflow)).resolves.toEqual([
++      true,
++      { overflow: true },
++    ]);
++    pending.resolve([true, { messages: [] }]);
++    await first;
++    expect(overflow).toHaveBeenCalledTimes(1);
++  });
++});
+diff --git a/src/gateway/server-methods/chat-history-single-flight.ts b/src/gateway/server-methods/chat-history-single-flight.ts
+new file mode 100644
+index 00000000000..b8d8d5cff01
+--- /dev/null
++++ b/src/gateway/server-methods/chat-history-single-flight.ts
+@@ -0,0 +1,46 @@
++import type { RespondFn } from "./types.js";
++
++export type GatewayResponseArgs = Parameters<RespondFn>;
++
++/**
++ * Coalesces identical read-only history projections within one Gateway context.
++ * Entries exist only while work is running; completed responses are never cached.
++ */
++export class ChatHistorySingleFlight {
++  readonly #maxEntriesPerContext: number;
++  readonly #inFlightByContext = new WeakMap<object, Map<string, Promise<GatewayResponseArgs>>>();
++
++  constructor(options?: { maxEntriesPerContext?: number }) {
++    this.#maxEntriesPerContext = options?.maxEntriesPerContext ?? 128;
++  }
++
++  run(
++    context: object,
++    key: string,
++    build: () => Promise<GatewayResponseArgs>,
++  ): Promise<GatewayResponseArgs> {
++    let inFlight = this.#inFlightByContext.get(context);
++    if (!inFlight) {
++      inFlight = new Map();
++      this.#inFlightByContext.set(context, inFlight);
++    }
++    const existing = inFlight.get(key);
++    if (existing) {
++      return existing;
++    }
++    // Do not let arbitrary distinct request keys grow process-local bookkeeping
++    // without bound. Overflow requests retain the original independent behavior.
++    if (inFlight.size >= this.#maxEntriesPerContext) {
++      return Promise.resolve().then(build);
++    }
++    const operation = Promise.resolve().then(build);
++    inFlight.set(key, operation);
++    const release = () => {
++      if (inFlight.get(key) === operation) {
++        inFlight.delete(key);
++      }
++    };
++    void operation.then(release, release);
++    return operation;
++  }
++}

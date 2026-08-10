@@ -3,6 +3,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -85,6 +86,13 @@ export async function runPreparedEmbeddedLoop(
   } = input;
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
+  const markRuntimeProgress = (prefix: string, stage: string) =>
+    markDiagnosticRunProgress({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: `${prefix}:${stage}`,
+    });
   let startupStagesEmitted = false;
   const preparedRuntime = await measureEmbeddedAgentPreparation(
     "runtime",
@@ -102,8 +110,12 @@ export async function runPreparedEmbeddedLoop(
         notifyExecutionPhase,
         fallbackConfigured,
         preparedModelRuntime: input.preparedModelRuntime,
+        markDiagnosticStage: (stage) => markRuntimeProgress("agent_runtime", stage),
       }),
-    { config: params.config },
+    {
+      config: params.config,
+      onStageStart: (stage) => markRuntimeProgress("agent_prepare", stage),
+    },
   );
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;

@@ -158,6 +158,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   getModel(): Model;
   nativeModelOwned: boolean;
   requestedProfileId?: string;
+  initialModelAuthProfileId?: string;
   providerUsesProfileScopedModelMetadata: boolean;
   resolveModel(request: {
     config: OpenClawConfig;
@@ -187,11 +188,13 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         // prepared profile or direct auth source changes.
         forceResolve:
           forceResolve ||
-          shouldForceCredentialScopedModelResolve(
+          (shouldForceCredentialScopedModelResolve(
             plan,
             params.requestedProfileId,
             params.providerUsesProfileScopedModelMetadata,
-          ),
+          ) &&
+            (plan.forwardedAuthProfileId ?? params.requestedProfileId) !==
+              params.initialModelAuthProfileId),
         resolveModel: (request) => params.resolveModel(request),
       })) ?? model
     );
