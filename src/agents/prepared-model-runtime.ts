@@ -262,7 +262,7 @@ async function activateStandalonePreparedModelRuntimeNow(
           ...input,
           preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
         },
-        { provenance: "standalone" },
+        { provenance: "standalone", ...(input.readOnly ? { catalogMode: "static" } : {}) },
       );
     } catch (error) {
       if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
@@ -345,11 +345,15 @@ async function acquirePreparedModelRuntimeLease(
           modelRuntimeBuildTimeoutMs,
           undefined,
           provenance,
+          input.readOnly ? "static" : "live",
         );
       } else if (existing) {
         snapshot = await prepareModelRuntimeSnapshot(input);
       } else {
-        snapshot = await publishPreparedModelRuntimeSnapshot(input, { provenance });
+        snapshot = await publishPreparedModelRuntimeSnapshot(input, {
+          provenance,
+          ...(input.readOnly ? { catalogMode: "static" } : {}),
+        });
       }
     } catch (error) {
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {

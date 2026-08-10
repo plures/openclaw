@@ -160,6 +160,22 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
+  it("publishes standalone read-only owners without live catalog discovery", async () => {
+    const input = {
+      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      agentId: "default",
+      agentDir: "/tmp/read-only-agent",
+      workspaceDir: "/tmp/read-only-workspace",
+      readOnly: true,
+    };
+
+    const lease = await acquireReadOnlyPreparedModelRuntime(input);
+
+    expect(lease.snapshot.configuredRuntimeModels).toHaveLength(1);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    lease.release();
+  });
+
   it("retires a standalone run owner when its final lease releases", async () => {
     const input = {
       config: {},
